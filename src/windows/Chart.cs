@@ -10,12 +10,15 @@ using System.Windows.Media;
 namespace CodexPetCredits {
     public sealed class CreditChart : FrameworkElement {
         private List<double?[]> previous = new List<double?[]>(), target = new List<double?[]>();
+        private List<double?[]> raw = new List<double?[]>();
         private DateTime started = DateTime.MinValue;
         private double oldMax = 1, max = 1;
         private int hover = -1;
         private string appliedKey = "";
         public string ContextKey = "";
         public bool Dark = true;
+        public bool Smooth;
+        public string Accent = "mint";
         public string[] Names = new string[0];
         public DateTime Start, End;
         public static readonly Color[] Colors = { Color.FromRgb(95,188,164), Color.FromRgb(144,158,236), Color.FromRgb(222,169,106) };
@@ -39,6 +42,7 @@ namespace CodexPetCredits {
         private void ClearHover(){ hover=-1; if(ToolTip is ToolTip)((ToolTip)ToolTip).IsOpen=false; ToolTip=null; InvalidateVisual(); }
         public void SetSeries(List<double?[]> values){
             values=values.Select(row=>row.Select(v=>v.HasValue && !Double.IsNaN(v.Value) && !Double.IsInfinity(v.Value) && v.Value>=0?v:null).ToArray()).ToList();
+            raw=values; if(Smooth) values=values.Select(CurveSmoothing.Apply).ToList();
             bool contextChanged=appliedKey!=ContextKey;
             bool same=!contextChanged && values.Count==target.Count && values.Select((row,i)=>row.SequenceEqual(target[i])).All(x=>x);
             if(same)return;
@@ -70,11 +74,12 @@ namespace CodexPetCredits {
         private void UpdateTooltip(){
             if(hover<0 || target.Count==0)return;
             int count=target[0].Length; if(count==0)return;
-            var lines=new List<string>{Start.AddTicks((End-Start).Ticks*hover/count).ToString("MM/dd HH:mm")};
-            for(int i=0;i<Math.Min(3,target.Count);i++)if(hover<target[i].Length)lines.Add(UiText.Short(i<Names.Length?Names[i]:"用量",16)+"  "+(target[i][hover].HasValue?target[i][hover].Value.ToString("0.##")+" cr":"缺少数据"));
+            var lines=new List<string>{Start.AddTicks((End-Start).Ticks*hover/count).ToString("MM/dd HH:mm")+" · 区间原值"};
+            for(int i=0;i<Math.Min(3,raw.Count);i++)if(hover<raw[i].Length)lines.Add(UiText.Short(i<Names.Length?Names[i]:"用量",16)+"  "+(raw[i][hover].HasValue?raw[i][hover].Value.ToString("0.##")+" cr":"缺少数据"));
             var tooltip=ToolTip as ToolTip ?? new ToolTip { MaxWidth=240, PlacementTarget=this };
             tooltip.Content=new TextBlock { Text=String.Join("\n",lines),TextWrapping=TextWrapping.Wrap,MaxWidth=220,FontSize=11 };
             ToolTip=tooltip;
+            if(IsKeyboardFocused)tooltip.IsOpen=true;
         }
         protected override void OnRender(DrawingContext dc){
             base.OnRender(dc); var plot=Plot; double scale=CurrentMax(); var data=Current();
@@ -90,9 +95,9 @@ namespace CodexPetCredits {
             for(int i=0;i<data.Count;i++){
                 var segment=new List<Point>();
                 for(int j=0;j<data[i].Length;j++){
-                    if(!data[i][j].HasValue){ DrawCurve(dc,segment,Colors[i%Colors.Length]); segment.Clear(); continue; }
+                    if(!data[i][j].HasValue){ DrawCurve(dc,segment,Palette.Series(Accent,Dark,i)); segment.Clear(); continue; }
                     any=true; segment.Add(new Point(plot.Left+plot.Width*(j+.5)/data[i].Length,plot.Bottom-Math.Min(1,data[i][j].Value/scale)*plot.Height));
-                } DrawCurve(dc,segment,Colors[i%Colors.Length]);
+                } DrawCurve(dc,segment,Palette.Series(Accent,Dark,i));
             }
             if(hover>=0 && data.Count>0 && data[0].Length>0){ double x=plot.Left+plot.Width*(hover+.5)/data[0].Length; dc.DrawLine(new Pen(muted,1),new Point(x,plot.Top),new Point(x,plot.Bottom)); }
             dc.Pop();

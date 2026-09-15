@@ -17,10 +17,22 @@ export class UsageIndex {
       db = new DatabaseSync(path.join(this.home, 'state_5.sqlite'), { readOnly: true });
       const columns = new Set(db.prepare('PRAGMA table_info(threads)').all().map(c => c.name));
       const wanted = ['id', 'title', 'cwd', 'rollout_path', 'model', 'created_at'].filter(c => columns.has(c));
-      if (!wanted.includes('id')) return;
-      for (const row of db.prepare('SELECT ' + wanted.join(',') + ' FROM threads').all()) this.threads.set(row.id, row);
+      if (wanted.includes('id')) for (const row of db.prepare('SELECT ' + wanted.join(',') + ' FROM threads').all()) {
+        // The database title may be the initial user message, not the desktop's renamed title.
+        this.threads.set(row.id, { ...row, title: '任务 ' + row.id.slice(0, 8) });
+      }
     } catch { /* A locked or future database version falls back to session metadata. */ }
     finally { db?.close(); }
+    try {
+      const names = new Map();
+      for (const line of fs.readFileSync(path.join(this.home, 'session_index.jsonl'), 'utf8').split('\n')) {
+        let item; try { item = JSON.parse(line); } catch { continue; }
+        if (typeof item.id !== 'string' || typeof item.thread_name !== 'string' || !item.thread_name.trim()) continue;
+        const previous = names.get(item.id);
+        if (!previous || (Date.parse(item.updated_at) || 0) >= (Date.parse(previous.updated_at) || 0)) names.set(item.id, item);
+      }
+      for (const [id, item] of names) this.threads.set(id, { ...this.threads.get(id), id, title: item.thread_name.trim() });
+    } catch { /* No display-name index: use a neutral task ID, never a prompt as its name. */ }
   }
   async scan(now = Date.now()) {
     if (this.scanning) return;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 
@@ -8,11 +9,17 @@ namespace CodexPetCredits {
     internal sealed class AttachmentFollower {
         private readonly AttachmentPlacement placement = new AttachmentPlacement();
         private object geometry;
-        private DateTime observedAt = DateTime.MinValue, lastDiscovery = DateTime.MinValue, lastFrame = DateTime.UtcNow, missingSince = DateTime.MinValue, releasedUntil = DateTime.MinValue;
+        private DateTime observedAt = DateTime.MinValue, lastDiscovery = DateTime.MinValue, missingSince = DateTime.MinValue, releasedUntil = DateTime.MinValue;
         private bool visible, seenCodex, first = true, mouseWasDown, pressedOnPet, transparent;
-        private Point press, offset;
+        private Point press, offset, releasedPoint;
         private Rect lastRect = Rect.Empty;
         private double x, y;
+        private int placedX = Int32.MinValue, placedY = Int32.MinValue;
+        private sealed class Discovery { public int Count; public IntPtr Handle; }
+        private Task<Discovery> discovery;
+        private AttachmentTransition transition;
+        private DateTime transitionStarted;
+        private Point transitionAnchor, transitionTarget;
         public IntPtr PetHandle { get; private set; }
         public bool Dragging { get; private set; }
         public void Observe(object data) {
@@ -25,39 +32,55 @@ namespace CodexPetCredits {
             var mouse = new Point(cursor.X, cursor.Y); bool down = (Native.GetAsyncKeyState(1) & 0x8000) != 0;
             if (down && !mouseWasDown) { pressedOnPet = !lastRect.IsEmpty && lastRect.Contains(mouse); press = mouse; offset = lastRect.IsEmpty ? new Point() : new Point(mouse.X - lastRect.X, mouse.Y - lastRect.Y); }
             if (down && pressedOnPet && (mouse - press).Length > 3) Dragging = true;
-            if (!down && mouseWasDown) { if (Dragging) releasedUntil = now.AddMilliseconds(120); Dragging = false; pressedOnPet = false; }
+            if (!down && mouseWasDown) { if (Dragging) { releasedUntil = now.AddMilliseconds(100); releasedPoint = mouse; } Dragging = false; pressedOnPet = false; }
             mouseWasDown = down;
             if (transparent != Dragging) { long style = Native.GetWindowLongPtr(handle, -20).ToInt64(); Native.SetWindowLongPtr(handle, -20, new IntPtr(Dragging ? style | 0x20 : style & ~0x20)); transparent = Dragging; }
-            if ((now - lastDiscovery).TotalMilliseconds >= 250) {
-                var ids = Native.CodexProcesses(); lastDiscovery = now;
-                if (ids.Count > 0) { seenCodex = true; missingSince = DateTime.MinValue; }
+            // Enumerating process modules costs several milliseconds; never do it on the rendering thread.
+            if (discovery != null && discovery.IsCompleted) {
+                var result = discovery.IsFaulted ? null : discovery.Result; discovery = null;
+                if (result != null && result.Count > 0) { seenCodex = true; missingSince = DateTime.MinValue; }
                 else { if (missingSince == DateTime.MinValue) missingSince = now; if ((seenCodex || (now - missingSince).TotalSeconds > 30) && (now - missingSince).TotalSeconds > 3) { window.Close(); return; } }
-                var candidate = Native.FindPet(ids, Json.Number(geometry, "innerWidth"), Json.Number(geometry, "dpr", 1)); if (candidate != IntPtr.Zero) PetHandle = candidate;
+                if (result != null && result.Handle != IntPtr.Zero) PetHandle = result.Handle;
+            }
+            if (discovery == null && (now - lastDiscovery).TotalMilliseconds >= (PetHandle == IntPtr.Zero ? 500 : 2000)) {
+                lastDiscovery = now;
+                discovery = Task.Run(delegate { var ids = Native.CodexProcesses(); return new Discovery { Count = ids.Count, Handle = Native.FindPet(ids, 0, 1) }; });
             }
             bool nativeVisible = PetHandle != IntPtr.Zero && Native.IsWindow(PetHandle) && Native.IsWindowVisible(PetHandle);
             bool fresh = geometry != null && visible && (now - observedAt).TotalMilliseconds < 1400;
-            if (!Dragging && (!nativeVisible || !fresh)) { if (window.IsVisible) window.Hide(); first = true; return; }
+            if (!Dragging && (!nativeVisible || !fresh)) { if (window.IsVisible) window.Hide(); first = true; transition = null; return; }
             double dpr = Json.Number(geometry, "dpr", 1); Rect pet;
-            if (Dragging || now < releasedUntil) pet = new Rect(mouse.X - offset.X, mouse.Y - offset.Y, Math.Max(1, lastRect.Width), Math.Max(1, lastRect.Height));
+            if (Dragging || now < releasedUntil) { var pointer = Dragging ? mouse : releasedPoint; pet = new Rect(pointer.X - offset.X, pointer.Y - offset.Y, Math.Max(1, lastRect.Width), Math.Max(1, lastRect.Height)); }
             else { var origin = new Native.Point(); Native.ClientToScreen(PetHandle, ref origin); pet = new Rect(origin.X + Json.Number(geometry, "x") * dpr, origin.Y + Json.Number(geometry, "y") * dpr, Math.Max(1, Json.Number(geometry, "width") * dpr), Math.Max(1, Json.Number(geometry, "height") * dpr)); }
-            var obstacles = new List<Rect>();
+            var obstacles = new List<Rect> { pet };
             foreach (var r in Json.Items(Json.Get(geometry, "regions"))) obstacles.Add(new Rect(pet.X + (Json.Number(r, "x") - Json.Number(geometry, "x")) * dpr, pet.Y + (Json.Number(r, "y") - Json.Number(geometry, "y")) * dpr, Math.Max(1, Json.Number(r, "width") * dpr), Math.Max(1, Json.Number(r, "height") * dpr)));
             lastRect = pet; var bounds = Native.WorkArea((int)(pet.X + pet.Width / 2), (int)(pet.Y + pet.Height / 2));
             var work = new Rect(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
-            double dpi = VisualTreeHelper.GetDpi(window).DpiScaleX; window.MaxHeight = Math.Max(140, work.Height / dpi - 24);
+            double dpi = VisualTreeHelper.GetDpi(window).DpiScaleX;
+            double maxHeight = Math.Max(140, work.Height / dpi - 24); if (window.MaxHeight != maxHeight) window.MaxHeight = maxHeight;
+            int previousSide = placement.Side;
             var destination = placement.Place(pet, new Size(window.Width * dpi, Math.Max(80, window.ActualHeight) * dpi), work, obstacles, Dragging);
-            double dt = Math.Min(.1, Math.Max(.001, (now - lastFrame).TotalSeconds)); lastFrame = now;
-            double factor = SystemParameters.ClientAreaAnimation ? 1 - Math.Exp(-dt / .035) : 1;
-            // No easing debt while dragging; easing is reserved for the short settling movement.
-            if (Dragging || first || Math.Abs(destination.X - x) > 450 || Math.Abs(destination.Y - y) > 450) { x = destination.X; y = destination.Y; first = false; }
-            else {
-                double nextX = x + (destination.X - x) * factor, nextY = y + (destination.Y - y) * factor;
-                var nextBounds = new Rect(nextX, nextY, destination.Width, destination.Height);
-                // A direction change must not animate through the pet or its native controls.
-                if (nextBounds.IntersectsWith(pet) || obstacles.Exists(r => nextBounds.IntersectsWith(r))) { x = destination.X; y = destination.Y; }
-                else { x = nextX; y = nextY; }
+            if (!first && previousSide != placement.Side && SystemParameters.ClientAreaAnimation) {
+                transition = new AttachmentTransition(new Rect(x, y, destination.Width, destination.Height), destination, work, obstacles);
+                transitionStarted = now; transitionAnchor = pet.TopLeft; transitionTarget = destination.TopLeft;
             }
-            Native.SetWindowPos(handle, new IntPtr(-1), (int)Math.Round(x), (int)Math.Round(y), 0, 0, 0x0010 | 0x0001);
+            double opacity = 1;
+            if (transition != null) {
+                double progress = Math.Min(1, (now - transitionStarted).TotalMilliseconds / 340);
+                var point = transition.Sample(progress); var translation = pet.TopLeft - transitionAnchor;
+                // Keep a direction-change animation attached to the moving pet, including edge clamping.
+                point += translation + (destination.TopLeft - (transitionTarget + translation)) * progress;
+                x = Math.Max(work.Left + 2, Math.Min(point.X, work.Right - destination.Width - 2));
+                y = Math.Max(work.Top + 2, Math.Min(point.Y, work.Bottom - destination.Height - 2));
+                opacity = transition.Visibility(progress);
+                if (obstacles.Exists(r => new Rect(x,y,destination.Width,destination.Height).IntersectsWith(r))) opacity = 0;
+                if (progress >= 1) { transition = null; x = destination.X; y = destination.Y; opacity = 1; }
+            } else { x = destination.X; y = destination.Y; }
+            first = false;
+            if (Math.Abs(window.Opacity - opacity) > .001) window.Opacity = opacity;
+            int nextX = (int)Math.Round(x), nextY = (int)Math.Round(y);
+            // Preserve popup z-order and skip stationary frames. Raising the main HWND hides its dropdowns.
+            if (nextX != placedX || nextY != placedY) { Native.SetWindowPos(handle, IntPtr.Zero, nextX, nextY, 0, 0, 0x0010 | 0x0001 | 0x0004); placedX = nextX; placedY = nextY; }
             if (!window.IsVisible) window.Show();
         }
     }

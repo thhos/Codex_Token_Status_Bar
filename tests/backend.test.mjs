@@ -23,10 +23,10 @@ test('backend survives an empty profile, reports missing data, validates and per
   try {
     const empty = await until(m => m.type === 'view');
     assert.equal(empty.remaining, null); assert.equal(empty.total, null); assert.equal(empty.forecast, '正在学习');
-    child.stdin.write(JSON.stringify({ type: 'settings', density: 2, opacity: 63, range: '7d', scope: 'projects', theme: 'light' }) + '\n');
+    child.stdin.write(JSON.stringify({ type: 'settings', density: 2, opacity: 63, range: '7d', scope: 'projects', theme: 'light', accent: 'violet', smoothing: 'raw' }) + '\n');
     await until(m => m.settings?.opacity === 63 && m.settings?.range === '7d');
     const saved = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json')));
-    assert.deepEqual(saved, { density: 2, opacity: 63, range: '7d', scope: 'projects', theme: 'light' });
+    assert.deepEqual(saved, { density: 2, opacity: 63, range: '7d', scope: 'projects', theme: 'light', accent: 'violet', smoothing: 'raw' });
     child.stdin.write(JSON.stringify({ type: 'settings', opacity: -10, range: 'invalid', density: 999 }) + '\n');
     const validated = await until(m => m.settings?.opacity === 40);
     assert.equal(validated.settings.range, '7d'); assert.equal(validated.settings.density, 2);

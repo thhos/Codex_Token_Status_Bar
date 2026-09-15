@@ -14,6 +14,8 @@
   "warning": true,
   "subtitle": "演示数据 · 主要项目",
   "total": 126.42,
+  "totalLabel": "图中 2 个项目 · 所选时段合计",
+  "recentCredits": { "hour": 18.6, "day": 142.3 },
   "series": [
     {
       "name": "Status Bar",
@@ -138,6 +140,10 @@
   "other": [
     "GPT-5.3-Codex-Spark  5h 100% · 周 100%",
     "gpt-reserve  周 100%"
+  ],
+  "otherQuotas": [
+    { "name": "GPT-5.3-Codex-Spark", "value": "5h 100% · 周 100%" },
+    { "name": "gpt-reserve", "value": "周 100%" }
   ],
   "resetLabel": "9/21 12:16",
   "updated": 12,

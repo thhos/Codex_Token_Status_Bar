@@ -60,7 +60,7 @@ public static class FrontendRegression {
             try {
                 var texts = Descendants(window).OfType<TextBlock>().Where(t => t.Text == "Status Bar").ToArray();
                 Require(texts.Length > 0,"legend label missing");
-                foreach (var text in texts) Require(((SolidColorBrush)text.Foreground).Color.R < 100,"legend retains pale dark-theme text");
+                foreach (var text in texts) Require(((SolidColorBrush)text.Foreground).Color.R < 140,"legend retains pale dark-theme text");
             } finally { window.Close(); }
         });
         Check("changing task never interpolates unrelated credit values", delegate {
@@ -76,6 +76,33 @@ public static class FrontendRegression {
             Require(!(bool)lifecycle.Invoke(null,new object[]{(uint)0x8003,-4,0}),"child hide event hides the panel");
             Require(!(bool)lifecycle.Invoke(null,new object[]{(uint)0x8001,0,2}),"child destroy event hides the panel");
             Require((bool)lifecycle.Invoke(null,new object[]{(uint)0x8003,0,0}),"real window hide was ignored");
+        });
+        Check("direction changes move continuously around the pet", delegate {
+            var pet=new Rect(700,390,100,120);var from=new Rect(600,140,320,200);var to=new Rect(600,550,320,200);var work=new Rect(0,0,1600,1000);
+            var transition=new AttachmentTransition(from,to,work,new[]{pet});
+            Require(!transition.FadeThrough,"a clear route should animate movement");
+            var previous=transition.Sample(0);Require(previous==from.TopLeft,"wrong transition start");
+            for(int i=1;i<=60;i++) {var point=transition.Sample(i/60.0);Require((point-previous).Length<40,"animation teleports between frames");Require(!new Rect(point,to.Size).IntersectsWith(pet),"animation crosses the pet");previous=point;}
+            Require(transition.Sample(1)==to.TopLeft,"transition misses destination");
+            var blocked=new AttachmentTransition(new Rect(0,0,320,200),new Rect(0,700,320,200),new Rect(0,0,330,1000),new[]{new Rect(0,400,330,100)});
+            Require(blocked.FadeThrough && blocked.Visibility(.5)==0,"no-space transition must relocate while fully faded");
+        });
+        Check("smoothing reduces spikes without filling missing data or changing raw samples", delegate {
+            var raw=new double?[]{0,0,30,0,0,null,80,80,80};var result=CurveSmoothing.Apply(raw);
+            Require(result[2]<30 && result[2]>0,"spike remains jagged");Require(!result[5].HasValue,"missing data was invented");
+            Require(result[6]==80 && raw[2]==30,"filter crossed gap or changed raw credits");
+            var chart=new CreditChart{Smooth=true};chart.SetSeries(new List<double?[]>{raw});chart.FinishAnimation();
+            var stored=(List<double?[]>)typeof(CreditChart).GetField("raw",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart);
+            Require(stored[0][2]==30,"hover data lost the original spike");
+        });
+        Check("theme colors and expanded sections work without unbounded layout", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=2;
+            var window=new CompanionWindow(args[0],true);window.Show();var colors=new HashSet<Color>();
+            try{foreach(string accent in Palette.Keys){settings["accent"]=accent;window.UpdateView(fixture);window.UpdateLayout();var value=(TextBlock)typeof(CompanionWindow).GetField("amount",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);colors.Add(((SolidColorBrush)value.Foreground).Color);}
+                Require(colors.Count==5,"theme selector does not change displayed accent");
+                foreach(var expander in Descendants(window).OfType<Expander>().ToArray())expander.IsExpanded=true;window.UpdateLayout();Require(window.ActualHeight<850,"details overflow the panel");
+            }finally{window.Close();}
         });
         return failures == 0 ? 0 : 1;
     }

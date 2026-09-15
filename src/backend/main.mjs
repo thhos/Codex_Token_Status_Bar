@@ -16,7 +16,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(dataDir, name), 'utf8')); } catch { return fallback; } };
 function save(name, value) { const destination = path.join(dataDir, name), temp = destination + '.tmp'; fs.writeFileSync(temp, JSON.stringify(value)); fs.renameSync(temp, destination); }
 const card = JSON.parse(fs.readFileSync(new URL('./rates.json', import.meta.url), 'utf8'));
-let settings = { density: 0, opacity: 90, range: '24h', scope: 'current', theme: 'dark', ...read('settings.json', {}) };
+let settings = { density: 0, opacity: 90, range: '24h', scope: 'current', theme: 'dark', accent: 'mint', smoothing: 'smooth', ...read('settings.json', {}) };
 const ranges = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY };
 const index = new UsageIndex(home, card, read('usage-cache.json', {}));
 let samples = read('quota-history.json', []), rates = null, quota = null, lastQuota = 0, error = '', initialized = false;
@@ -78,40 +78,41 @@ function buildView() {
   if (settings.scope === 'current') {
     selected = task ? all.filter(e => root(e.thread) === root(task.id)) : [];
     subtitle = (task?.followed ? '正在查看 · ' : '最近活跃 · ') + (task?.title || '暂无任务');
-    groups = [{ name: task?.title || '当前任务', events: selected }];
+    groups = [{ id: task?.id || 'current', name: task?.title || '当前任务', events: selected }];
   } else if (settings.scope === 'projects' || settings.scope === 'tasks') {
     const map = new Map();
     for (const e of all) { const key = settings.scope === 'projects' ? e.project || '未知项目' : root(e.thread); if (!map.has(key)) map.set(key, []); map.get(key).push(e); }
-    groups = [...map].map(([key, events]) => ({ name: settings.scope === 'projects' ? path.basename(key) || key : index.threads.get(key)?.title || key.slice(0, 8), events }));
+    groups = [...map].map(([key, events]) => ({ id: key, name: settings.scope === 'projects' ? path.basename(key) || key : index.threads.get(key)?.title || '任务 ' + key.slice(0, 8), events }));
     groups.sort((a, b) => sum(b.events) - sum(a.events)); groups = groups.slice(0, 3);
     selected = groups.flatMap(g => g.events); subtitle = '本机已记录 · 消耗最多的 3 个' + (settings.scope === 'projects' ? '项目' : '任务');
-  } else groups = [{ name: '本机记录', events: selected }];
+  } else groups = [{ id: 'account', name: '本机汇总', events: selected }];
   const unknown = selected.filter(e => e.credits == null).length;
   const predictionKey = Math.floor(now / 60_000) + ':' + lastQuota + ':' + Math.floor((index.events.at(-1)?.time || 0) / 60_000);
   if (predictionCache.key !== predictionKey) predictionCache = { key: predictionKey, value: forecastQuota(samples, index.events.map(e => e.time), now, quota) };
   const prediction = predictionCache.value;
   const series = groups.map(g => ({ name: g.name, total: g.events.some(e => e.credits != null) ? sum(g.events) : null, points: g.events.length ? bucketCredits(g.events, start, timeline.end).map(p => p.value) : Array(48).fill(null) }));
-  const other = Object.entries(rates?.rateLimitsByLimitId || {}).filter(([id]) => id !== 'codex').map(([id, item]) => {
+  const otherQuotas = Object.entries(rates?.rateLimitsByLimitId || {}).filter(([id]) => id !== 'codex').map(([id, item]) => {
     const w = [item.primary, item.secondary].filter(Boolean), name = item.limitName || id;
-    return name + '  ' + w.map(x => (x.windowDurationMins === 10080 ? '周 ' : Math.round(x.windowDurationMins / 60) + 'h ') + Math.max(0, 100 - x.usedPercent) + '%').join(' · ');
+    return { name, value: w.map(x => (x.windowDurationMins === 10080 ? '周 ' : Math.round(x.windowDurationMins / 60) + 'h ') + Math.max(0, 100 - x.usedPercent) + '%').join(' · ') };
   });
+  const other = otherQuotas.map(row => row.name + '  ' + row.value);
   const recentGroups = new Map();
   for (const e of selected) { const name = e.model || '未知模型', group = recentGroups.get(name) || { credits: 0, known: 0, missing: 0 };
     if (e.credits == null) group.missing++; else { group.credits += e.credits; group.known++; } recentGroups.set(name, group); }
   const detailRows = [...recentGroups].sort((a, b) => b[1].credits - a[1].credits).slice(0, 5).map(([name, value]) => ({ name, value: value.known ? value.credits.toFixed(2) + ' cr' + (value.missing ? '（部分）' : '') : '费率未知' }));
   const recentDay = index.events.filter(e => e.time >= now - DAY && e.credits != null);
   const recentHour = recentDay.filter(e => e.time >= now - HOUR);
-  detailRows.unshift({ name: '本机近 24h / 1h', value: (recentDay.length ? sum(recentDay).toFixed(1) : '—') + ' / ' + (recentHour.length ? sum(recentHour).toFixed(1) : '—') + ' cr' });
-  if (officialThread && task && officialThread.task === task.id) detailRows.unshift({ name: '此任务 · 服务端估算', value: officialThread.credits.toFixed(2) + ' cr' });
   const resetLabel = quota ? new Date(quota.resetsAt * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '等待数据';
   return { type: 'view', settings, remaining: quota?.remaining ?? null, quotaLabel: (quota?.windowDurationMins === 10080 ? 'CODEX · 周剩余' : 'CODEX · 剩余额度') + (lastQuota && now - lastQuota > 5 * 60_000 ? ' · 待更新' : ''),
     forecast: prediction.label, forecastDetail: prediction.detail, warning: prediction.warning, subtitle,
     taskTitle: task?.title || '暂无任务', projectTitle: task?.project ? path.basename(task.project) : '',
     samplingStatus: error ? '更新暂停' : !initialized ? '整理记录中' : '已更新',
     followLabel: task?.followed ? '正在查看' : '最近活跃',
-    chartKey: settings.scope + ':' + settings.range + ':' + groups.map(g => g.name).join('|'),
+    chartKey: settings.scope + ':' + settings.range + ':' + groups.map(g => g.id).join('|'),
+    totalLabel: (settings.scope === 'current' ? '当前任务' : settings.scope === 'account' ? '本机全部' : '图中 ' + groups.length + ' 个' + (settings.scope === 'projects' ? '项目' : '任务')) + ' · 所选时段合计',
+    officialTaskCredits: officialThread && task && officialThread.task === task.id ? officialThread.credits : null,
     recentCredits: { hour: recentHour.length ? sum(recentHour) : null, day: recentDay.length ? sum(recentDay) : null },
-    total: selected.some(e => e.credits != null) ? sum(selected) : null, series, range: settings.range, details: detailRows, other, resetLabel,
+    total: selected.some(e => e.credits != null) ? sum(selected) : null, series, range: settings.range, details: detailRows, other, otherQuotas, resetLabel,
     updated: lastQuota ? Math.floor((now - lastQuota) / 1000) : null,
     status: error || (!initialized ? '正在索引本机历史…' : !cdp.connected ? '任务跟随待连接 · 请从启动入口打开 Codex' : task?.followed ? '已跟随当前任务' : '当前页面未识别 · 使用最近活跃任务'),
     coverage: (unknown ? unknown + ' 次调用缺少费率，合计为已知部分。' : '') + '本机记录；缺少速度档位时按标准费率估算。未含其他设备及工具额外费用。',
@@ -128,7 +129,7 @@ async function scan() {
   catch { error = '本机历史索引暂不可用'; }
   finally { scanBusy = false; emit(); }
 }
-async function pollCdp() { if (cdpBusy || !running) return; cdpBusy = true; try { await cdp.poll(); } finally { cdpBusy = false; emit(); } }
+async function pollCdp() { if (cdpBusy || !running) return; cdpBusy = true; const before = cdp.current?.task; try { await cdp.poll(); } finally { cdpBusy = false; if (cdp.current?.task !== before) emit(); } }
 let petBusy = false;
 async function pollPet() {
   if (petBusy || !running) return;
@@ -142,6 +143,8 @@ function updateSettings(message) {
   if (ranges[message.range]) settings.range = message.range;
   if (['current', 'account', 'projects', 'tasks'].includes(message.scope)) settings.scope = message.scope;
   if (['light', 'dark'].includes(message.theme)) settings.theme = message.theme;
+  if (['mint', 'blue', 'violet', 'amber', 'rose'].includes(message.accent)) settings.accent = message.accent;
+  if (['smooth', 'raw'].includes(message.smoothing)) settings.smoothing = message.smoothing;
   save('settings.json', settings); emit();
 }
 function shutdown() { if (!running) return; running = false; rpc?.close(); cdp.close(); for (const timer of timers) clearInterval(timer); setTimeout(() => process.exit(0), 1200).unref(); }
