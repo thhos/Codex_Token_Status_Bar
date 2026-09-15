@@ -1,5 +1,13 @@
 import { selectFocusedTask } from './core.mjs';
 
+export const READ_PET = String.raw`(() => {
+  const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect();if(!r.width||!r.height)return false;for(let p=e;p;p=p.parentElement){const s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0)return false;}return true;};
+  const e=document.querySelector('[data-testid="avatar-mascot-button"][data-avatar-mascot="true"]');
+  const r=visible(e)?e.getBoundingClientRect():null;
+  const regions=[...document.querySelectorAll('[data-avatar-overlay-hit-region]')].filter(e=>e.getAttribute('data-avatar-overlay-hit-region')!=='mascot'&&visible(e)).map(e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};}).filter(r=>r.width>15&&r.height>10);
+  return {visible:document.visibilityState==='visible',mascot:r?{x:r.x,y:r.y,width:r.width,height:r.height,dpr:devicePixelRatio,innerWidth,innerHeight,regions}:null};
+})()`;
+
 export const READ_METADATA = String.raw`(() => {
   const visible = el => { if (!el) return false; const r=el.getBoundingClientRect(); if(r.width<=0 || r.height<=0)return false; for(let n=el;n;n=n.parentElement){const s=getComputedStyle(n);if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0)return false;} return true; };
   const composer = [...document.querySelectorAll('[data-above-composer-conversation-id]')].filter(visible);
@@ -31,7 +39,7 @@ class Connection {
 }
 
 export class CodexMetadata {
-  constructor(port) { this.port = port; this.connections = new Map(); this.current = null; this.pet = null; this.connected = false; }
+  constructor(port) { this.port = port; this.connections = new Map(); this.current = null; this.pet = null; this.connected = false; this.petTarget = null; this.petObservedAt = 0; }
   async poll() {
     try {
       const response = await fetch('http://127.0.0.1:' + this.port + '/json/list', { signal: AbortSignal.timeout(1500) });
@@ -48,8 +56,17 @@ export class CodexMetadata {
       }));
       this.connected = true;
       this.current = selectFocusedTask(metadata.filter(Boolean), this.current);
-      this.pet = metadata.find(t => t?.pet) || null;
-    } catch { this.connected = false; this.pet = null; this.current = null; }
+      const found = metadata.find(t => t?.pet);
+      this.petTarget = found?.targetId || null;
+      if (!this.petTarget && Date.now() - this.petObservedAt > 1200) this.pet = null;
+    } catch { this.connected = false; this.current = null; if (Date.now() - this.petObservedAt > 1200) this.pet = null; }
+  }
+  async pollPet() {
+    const connection = this.connections.get(this.petTarget);
+    if (!connection) return;
+    try { const result = await connection.call('Runtime.evaluate', { expression: READ_PET, returnByValue: true });
+      if (result.result?.value) { this.pet = result.result.value; this.petObservedAt = Date.now(); }
+    } catch { if (Date.now() - this.petObservedAt > 1200) this.pet = null; }
   }
   close() { for (const c of this.connections.values()) c.close(); this.connections.clear(); }
 }

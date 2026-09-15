@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { AppServer } from './rpc.mjs';
 import { UsageIndex } from './usage.mjs';
 import { CodexMetadata } from './cdp.mjs';
-import { selectQuota, forecastQuota, bucketCredits, DAY, HOUR } from './core.mjs';
+import { selectQuota, forecastQuota, bucketCredits, chartWindow, DAY, HOUR } from './core.mjs';
 
 const args = process.argv.slice(2);
 const arg = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
@@ -70,7 +70,7 @@ function currentTask() {
 }
 
 function buildView() {
-  const now = Date.now(), task = currentTask(), start = now - (ranges[settings.range] || DAY);
+  const now = Date.now(), task = currentTask(), timeline = chartWindow(now, ranges[settings.range] || DAY), start = timeline.start;
   const all = index.events.filter(e => e.time >= start && e.time <= now);
   const rootCache = new Map();
   const root = id => { if (!rootCache.has(id)) rootCache.set(id, rootTask(id)); return rootCache.get(id); };
@@ -90,7 +90,7 @@ function buildView() {
   const predictionKey = Math.floor(now / 60_000) + ':' + lastQuota + ':' + Math.floor((index.events.at(-1)?.time || 0) / 60_000);
   if (predictionCache.key !== predictionKey) predictionCache = { key: predictionKey, value: forecastQuota(samples, index.events.map(e => e.time), now, quota) };
   const prediction = predictionCache.value;
-  const series = groups.map(g => ({ name: g.name, total: g.events.some(e => e.credits != null) ? sum(g.events) : null, points: g.events.length ? bucketCredits(g.events, start, now).map(p => p.value) : Array(48).fill(null) }));
+  const series = groups.map(g => ({ name: g.name, total: g.events.some(e => e.credits != null) ? sum(g.events) : null, points: g.events.length ? bucketCredits(g.events, start, timeline.end).map(p => p.value) : Array(48).fill(null) }));
   const other = Object.entries(rates?.rateLimitsByLimitId || {}).filter(([id]) => id !== 'codex').map(([id, item]) => {
     const w = [item.primary, item.secondary].filter(Boolean), name = item.limitName || id;
     return name + '  ' + w.map(x => (x.windowDurationMins === 10080 ? '周 ' : Math.round(x.windowDurationMins / 60) + 'h ') + Math.max(0, 100 - x.usedPercent) + '%').join(' · ');
@@ -106,12 +106,17 @@ function buildView() {
   const resetLabel = quota ? new Date(quota.resetsAt * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '等待数据';
   return { type: 'view', settings, remaining: quota?.remaining ?? null, quotaLabel: (quota?.windowDurationMins === 10080 ? 'CODEX · 周剩余' : 'CODEX · 剩余额度') + (lastQuota && now - lastQuota > 5 * 60_000 ? ' · 待更新' : ''),
     forecast: prediction.label, forecastDetail: prediction.detail, warning: prediction.warning, subtitle,
+    taskTitle: task?.title || '暂无任务', projectTitle: task?.project ? path.basename(task.project) : '',
+    samplingStatus: error ? '更新暂停' : !initialized ? '整理记录中' : '已更新',
+    followLabel: task?.followed ? '正在查看' : '最近活跃',
+    chartKey: settings.scope + ':' + settings.range + ':' + groups.map(g => g.name).join('|'),
+    recentCredits: { hour: recentHour.length ? sum(recentHour) : null, day: recentDay.length ? sum(recentDay) : null },
     total: selected.some(e => e.credits != null) ? sum(selected) : null, series, range: settings.range, details: detailRows, other, resetLabel,
     updated: lastQuota ? Math.floor((now - lastQuota) / 1000) : null,
     status: error || (!initialized ? '正在索引本机历史…' : !cdp.connected ? '任务跟随待连接 · 请从启动入口打开 Codex' : task?.followed ? '已跟随当前任务' : '当前页面未识别 · 使用最近活跃任务'),
     coverage: (unknown ? unknown + ' 次调用缺少费率，合计为已知部分。' : '') + '本机记录；缺少速度档位时按标准费率估算。未含其他设备及工具额外费用。',
     rateVersion: card.version, pet: cdp.pet?.mascot || null, petPageVisible: cdp.pet?.visible || false, cdpConnected: cdp.connected,
-    windowStart: start, windowEnd: now };
+    windowStart: start, windowEnd: timeline.end };
 }
 function sum(events) { return events.reduce((s, e) => s + (e.credits || 0), 0); }
 function emit() { if (running) process.stdout.write(JSON.stringify(buildView()) + '\n'); }
@@ -124,6 +129,13 @@ async function scan() {
   finally { scanBusy = false; emit(); }
 }
 async function pollCdp() { if (cdpBusy || !running) return; cdpBusy = true; try { await cdp.poll(); } finally { cdpBusy = false; emit(); } }
+let petBusy = false;
+async function pollPet() {
+  if (petBusy || !running) return;
+  petBusy = true;
+  try { await cdp.pollPet(); if (running) process.stdout.write(JSON.stringify({ type: 'pet', pet: cdp.pet?.mascot || null, visible: cdp.pet?.visible || false, observedAt: cdp.petObservedAt }) + '\n'); }
+  finally { petBusy = false; }
+}
 function updateSettings(message) {
   if (Number.isFinite(message.opacity)) settings.opacity = Math.max(40, Math.min(100, message.opacity));
   if ([0, 1, 2].includes(message.density)) settings.density = message.density;
@@ -138,7 +150,7 @@ input.on('line', line => { try { const m = JSON.parse(line); if (m.type === 'set
 input.on('close', shutdown); process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 process.stdout.on('error', shutdown);
 process.on('exit', () => rpc?.child?.kill());
-const timers = [setInterval(refreshQuota, 30_000), setInterval(scan, 10_000), setInterval(pollCdp, 500), setInterval(emit, 5000)];
+const timers = [setInterval(refreshQuota, 30_000), setInterval(scan, 10_000), setInterval(pollCdp, 1000), setInterval(pollPet, 40), setInterval(emit, 5000)];
 emit(); void refreshQuota(); void scan(); void pollCdp();
 
 // Read-only smoke mode exercises real adapters and exits without launching any UI.

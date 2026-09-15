@@ -1,12 +1,13 @@
 {
   "name": "codex-pet-credits",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Windows companion for the Codex pet, with measured quota and estimated credit trends",
   "engines": { "node": ">=24.0.0" },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
+    "test:frontend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Frontend.ps1",
     "check": "node --check src/backend/main.mjs",
     "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build.ps1"
   }

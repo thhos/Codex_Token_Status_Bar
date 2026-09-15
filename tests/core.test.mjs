@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { usageDelta, estimateCredits, selectQuota, forecastQuota, bucketCredits, monotoneSegments, selectFocusedTask, HOUR, DAY } from '../src/backend/core.mjs';
+import { usageDelta, estimateCredits, selectQuota, forecastQuota, bucketCredits, chartWindow, monotoneSegments, selectFocusedTask, HOUR, DAY } from '../src/backend/core.mjs';
 import { UsageIndex } from '../src/backend/usage.mjs';
 const card = JSON.parse(fs.readFileSync(new URL('../src/backend/rates.json', import.meta.url)));
 
@@ -74,4 +74,13 @@ test('task follows focus but does not jump to background work', () => {
   assert.equal(selectFocusedTask([a, b], a).task, 'a');
   assert.equal(selectFocusedTask([a, { ...b, focused: true }], a).task, 'b');
   assert.equal(selectFocusedTask([a, b], null), null);
+});
+
+test('refreshing the same time window does not move historic observations between buckets', () => {
+  const now = 1789452000123;
+  const a = chartWindow(now, DAY), b = chartWindow(now + 500, DAY);
+  assert.deepEqual(a, b);
+  const events = [{ time: a.start + DAY / 48 + 200, credits: 9 }];
+  assert.deepEqual(bucketCredits(events, a.start, a.end), bucketCredits(events, b.start, b.end));
+  assert.ok(a.end > now && a.end - now <= DAY / 48);
 });

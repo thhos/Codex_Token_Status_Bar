@@ -33,13 +33,12 @@ namespace CodexPetCredits {
         private readonly string root;
         private readonly bool testMode;
         private Process backend;
-        private IntPtr hwnd, petHandle, hook;
+        private IntPtr hwnd, hook;
         private Native.WinEventProc hookCallback;
         private readonly DispatcherTimer followTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-        private DateTime lastDiscover = DateTime.MinValue, lastFrame = DateTime.UtcNow, missingSince = DateTime.MinValue;
-        private bool hadCodex, firstPosition = true, updating, dark = true;
+        private bool updating, dark = true;
         private int density;
-        private double backgroundOpacity = 90, physicalX, physicalY;
+        private double backgroundOpacity = 90;
         private object state;
         private readonly Border panel = new Border { CornerRadius = new CornerRadius(18), BorderThickness = new Thickness(1), Padding = new Thickness(16, 12, 16, 12) };
         private readonly StackPanel layout = new StackPanel();
@@ -52,6 +51,13 @@ namespace CodexPetCredits {
         private readonly Slider opacity = new Slider { Minimum = 40, Maximum = 100, Value = 90, Width = 130, TickFrequency = 5, IsSnapToTickEnabled = false, Margin = new Thickness(8, 0, 0, 0) };
         private readonly List<TextBlock> textBlocks = new List<TextBlock>();
         private readonly List<Button> buttons = new List<Button>();
+        private readonly StackPanel legendRows = new StackPanel(), preferences = new StackPanel();
+        private readonly System.Windows.Controls.Primitives.Popup titlePopup = new System.Windows.Controls.Primitives.Popup();
+        private readonly AttachmentFollower follower = new AttachmentFollower();
+        private string renderedDetails = "";
+        private object queuedPet;
+        private bool petQueued;
+        private readonly object inbox = new object();
         public CompanionWindow(string projectRoot, bool testing) {
             root = projectRoot; testMode = testing;
             Title = "Codex Pet Credits"; Width = 310; SizeToContent = SizeToContent.Height;
@@ -105,13 +111,59 @@ namespace CodexPetCredits {
             coverage = Label("", 10); coverage.TextWrapping = TextWrapping.Wrap; coverage.Margin = new Thickness(0, 6, 0, 0); detail.Children.Add(coverage);
             status = Label("正在连接…", 10); status.TextWrapping = TextWrapping.Wrap; status.Margin = new Thickness(0, 8, 0, 0); detail.Children.Add(status);
             var menu = new ContextMenu();
-            AddMenu(menu, "极简", delegate { SetDensity(0); }); AddMenu(menu, "趋势", delegate { SetDensity(1); }); AddMenu(menu, "详细 / 透明度", delegate { SetDensity(2); });
+            AddMenu(menu, "极简", delegate { SetDensity(0); }); AddMenu(menu, "趋势", delegate { SetDensity(1); }); AddMenu(menu, "详细", delegate { SetDensity(2); });
             AddMenu(menu, "刷新额度", delegate { Send(new Dictionary<string, object> { { "type", "refresh" } }); });
             AddMenu(menu, "退出挂件", delegate { Close(); }); panel.ContextMenu = menu;
-            PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Escape) SetDensity(0); };
+            PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Escape) { titlePopup.IsOpen = false; preferences.Visibility = Visibility.Collapsed; SetDensity(0); } };
             SourceInitialized += OnSourceInitialized;
-            Closed += delegate { followTimer.Stop(); if (hook != IntPtr.Zero) Native.UnhookWinEvent(hook); Send(new Dictionary<string, object> { { "type", "shutdown" } }); if (backend != null) { try { backend.StandardInput.Close(); } catch { } } };
-            SetDensity(0, false); ApplyTheme();
+            Closed += delegate { titlePopup.IsOpen = false; followTimer.Stop(); if (hook != IntPtr.Zero) Native.UnhookWinEvent(hook); Send(new Dictionary<string, object> { { "type", "shutdown" } }); if (backend != null) { try { backend.StandardInput.Close(); } catch { } } };
+            RebuildLayout(); SetDensity(0, false); ApplyTheme();
+        }
+        private static void Detach(FrameworkElement element) {
+            var parent = element.Parent as Panel; if (parent != null) parent.Children.Remove(element);
+            var decorator = element.Parent as Decorator; if (decorator != null) decorator.Child = null;
+        }
+        // A fixed hierarchy keeps titles and disclosure content from resizing the entire panel.
+        private void RebuildLayout() {
+            layout.Children.Clear(); trend.Children.Clear(); detail.Children.Clear();
+            var header = new Grid(); header.ColumnDefinitions.Add(new ColumnDefinition()); header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Detach(quotaLabel); quotaLabel.MaxWidth = 158; quotaLabel.HorizontalAlignment = HorizontalAlignment.Left; quotaLabel.TextTrimming = TextTrimming.CharacterEllipsis; header.Children.Add(quotaLabel);
+            var modes = new StackPanel { Orientation = Orientation.Horizontal };
+            string[] paths = { "M 1,6 L 12,6", "M 1,10 L 4,5 L 7,8 L 12,2", "M 2,2 L 12,2 M 2,6 L 12,6 M 2,10 L 9,10" };
+            for (int i = 0; i < 3; i++) { var button = buttons[i]; Detach(button); button.Width = 24; button.Height = 24; button.Content = new System.Windows.Shapes.Path { Data = Geometry.Parse(paths[i]), Stroke = Brushes.Gray, StrokeThickness = 1.3, Width = 12, Height = 12, Stretch = Stretch.Uniform }; modes.Children.Add(button); }
+            var settingsButton = Button("⋯", "外观与说明", delegate { preferences.Visibility = preferences.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible; });
+            modes.Children.Add(settingsButton); Grid.SetColumn(modes, 1); header.Children.Add(modes); layout.Children.Add(header);
+            var hero = new Grid { Margin = new Thickness(0, 6, 0, 0) }; hero.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) }); hero.ColumnDefinitions.Add(new ColumnDefinition());
+            Detach(amount); amount.FontSize = 27; hero.Children.Add(amount); Detach(forecast); forecast.FontSize = 11; forecast.TextTrimming = TextTrimming.CharacterEllipsis; Grid.SetColumn(forecast, 1); hero.Children.Add(forecast); layout.Children.Add(hero);
+            layout.Children.Add(trend); trend.Margin = new Thickness(0, 13, 0, 0);
+            var filters = new Grid(); filters.ColumnDefinitions.Add(new ColumnDefinition()); filters.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Detach(scope); Detach(total); total.FontSize = 19; scope.Height = 28; filters.Children.Add(scope); Grid.SetColumn(total, 1); filters.Children.Add(total); trend.Children.Add(filters);
+            subTitle.FontSize = 11; subTitle.MaxHeight = 18; subTitle.TextTrimming = TextTrimming.CharacterEllipsis;
+            var titleButton = new Button { Content = subTitle, Height = 24, Margin = new Thickness(0, 7, 0, 5), Padding = new Thickness(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Left, Cursor = Cursors.Hand, ToolTip = "点击查看完整标题" };
+            titleButton.Click += delegate { var content = new TextBox { Text = Json.Text(Json.Get(state, "settings"), "scope") == "current" ? Json.Text(state, "taskTitle", Json.Text(state, "subtitle")) : Json.Text(state, "subtitle"), IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, BorderThickness = new Thickness(0), Padding = new Thickness(10), FontSize = 12, Foreground = Foreground, Background = panel.Background }; titlePopup.Child = new Border { Child = content, Width = 300, Padding = new Thickness(4), CornerRadius = new CornerRadius(8), Background = panel.Background }; titlePopup.IsOpen = !titlePopup.IsOpen; };
+            titlePopup.PlacementTarget = titleButton; titlePopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom; titlePopup.StaysOpen = false; titlePopup.AllowsTransparency = true;
+            trend.Children.Add(titleButton);
+            var period = new DockPanel { Margin = new Thickness(0, 1, 0, 5) }; Detach(range); range.Width = 72; DockPanel.SetDock(range, Dock.Right); period.Children.Add(range); period.Children.Add(Label("估算 credits", 10)); trend.Children.Add(period);
+            chart.Height = 140; trend.Children.Add(chart); legendRows.Margin = new Thickness(0, 5, 0, 0); trend.Children.Add(legendRows);
+            layout.Children.Add(detail); detail.Margin = new Thickness(0, 12, 0, 0); detail.Children.Add(reset);
+            var extras = new StackPanel(); extras.Children.Add(detailRows); extras.Children.Add(other);
+            detail.Children.Add(Disclosure("模型与其他额度", extras)); detail.Children.Add(status);
+            preferences.Visibility = Visibility.Collapsed; preferences.Margin = new Thickness(0, 13, 0, 0); layout.Children.Add(preferences);
+            var opacityRow = new DockPanel { Margin = new Thickness(0, 0, 0, 9) }; opacityRow.Children.Add(Label("背景不透明度", 11)); Detach(opacity); opacityRow.Children.Add(opacity); preferences.Children.Add(opacityRow);
+            var theme = buttons[4]; Detach(theme); theme.Content = "浅色 / 深色"; theme.Width = 105; theme.FontSize = 11; theme.HorizontalAlignment = HorizontalAlignment.Left; preferences.Children.Add(theme);
+            preferences.Children.Add(Disclosure("数据与预测说明", coverage));
+            foreach (var text in new[] { coverage, other, status }) text.TextWrapping = TextWrapping.Wrap;
+        }
+        // A neutral disclosure control keeps Windows' native white header chrome out of dark mode.
+        private Expander Disclosure(string title, UIElement content) {
+            var expander = new Expander { Header = Label(title, 11), Content = content, Margin = new Thickness(0, 9, 0, 3) };
+            expander.Template = (ControlTemplate)XamlReader.Parse(@"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Expander'>
+              <StackPanel><ToggleButton IsChecked='{Binding IsExpanded,Mode=TwoWay,RelativeSource={RelativeSource TemplatedParent}}' Content='{TemplateBinding Header}' HorizontalContentAlignment='Left' Cursor='Hand'>
+                <ToggleButton.Template><ControlTemplate TargetType='ToggleButton'><Border Background='Transparent' Padding='0,4'><DockPanel><Path x:Name='Chevron' Data='M 0,0 L 4,4 L 0,8' Stroke='#8d9aa3' StrokeThickness='1.3' Margin='2,0,10,0' VerticalAlignment='Center' RenderTransformOrigin='0.5,0.5'/><ContentPresenter VerticalAlignment='Center'/></DockPanel></Border>
+                <ControlTemplate.Triggers><Trigger Property='IsChecked' Value='True'><Setter TargetName='Chevron' Property='RenderTransform'><Setter.Value><RotateTransform Angle='90'/></Setter.Value></Setter></Trigger><Trigger Property='IsKeyboardFocused' Value='True'><Setter Property='Opacity' Value='0.7'/></Trigger></ControlTemplate.Triggers></ControlTemplate></ToggleButton.Template>
+              </ToggleButton><ContentPresenter x:Name='Body' Content='{TemplateBinding Content}' Visibility='Collapsed'/></StackPanel>
+              <ControlTemplate.Triggers><Trigger Property='IsExpanded' Value='True'><Setter TargetName='Body' Property='Visibility' Value='Visible'/></Trigger></ControlTemplate.Triggers></ControlTemplate>");
+            return expander;
         }
         private TextBlock Label(string text, double size) { var label = new TextBlock { Text = text, FontSize = size, VerticalAlignment = VerticalAlignment.Center }; textBlocks.Add(label); return label; }
         private Button Button(string text, string hint, Action action) {
@@ -122,25 +174,28 @@ namespace CodexPetCredits {
         private static void AddMenu(ContextMenu menu, string label, Action action) { var item = new MenuItem { Header = label }; item.Click += delegate { action(); }; menu.Items.Add(item); }
         private void SetDensity(int value, bool save = true) {
             int previousDensity = density;
-            density = value; Width = value == 0 ? 310 : value == 1 ? 360 : 420;
+            density = value; Width = value == 0 ? 310 : 352;
+            for (int i = 0; i < Math.Min(3, buttons.Count); i++) buttons[i].Background = i == density ? new SolidColorBrush(dark ? Color.FromRgb(48, 63, 59) : Color.FromRgb(219, 235, 228)) : Brushes.Transparent;
             trend.Visibility = value > 0 ? Visibility.Visible : Visibility.Collapsed; detail.Visibility = value > 1 ? Visibility.Visible : Visibility.Collapsed;
-            if (save) SendSetting("density", value); firstPosition = true;
+            if (save) SendSetting("density", value);
             if (value > previousDensity && SystemParameters.ClientAreaAnimation && !testMode) {
                 var content = value == 1 ? trend : detail; content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)));
             }
         }
         private void ApplyTheme() {
             byte alpha = (byte)Math.Round(backgroundOpacity * 2.55);
-            panel.Background = new SolidColorBrush(dark ? Color.FromArgb(alpha, 20, 30, 39) : Color.FromArgb(alpha, 246, 249, 251));
-            panel.BorderBrush = new SolidColorBrush(dark ? Color.FromRgb(63, 83, 96) : Color.FromRgb(184, 202, 213));
+            panel.Background = new SolidColorBrush(dark ? Color.FromArgb(alpha, 27, 32, 39) : Color.FromArgb(alpha, 250, 251, 252));
+            panel.BorderBrush = new SolidColorBrush(dark ? Color.FromRgb(65, 73, 82) : Color.FromRgb(208, 216, 221));
             var primary = new SolidColorBrush(dark ? Color.FromRgb(233, 241, 244) : Color.FromRgb(23, 42, 56));
             foreach (var text in textBlocks) text.Foreground = primary;
-            foreach (var button in buttons) { button.Foreground = primary; button.Background = new SolidColorBrush(dark ? Color.FromRgb(41, 56, 67) : Color.FromRgb(221, 232, 237)); }
+            Foreground = primary;
+            foreach (var button in buttons) { button.Foreground = primary; button.Background = Brushes.Transparent; var icon = button.Content as System.Windows.Shapes.Path; if (icon != null) icon.Stroke = primary; }
+            for (int i = 0; i < 3; i++) if (i == density) buttons[i].Background = new SolidColorBrush(dark ? Color.FromRgb(48, 63, 59) : Color.FromRgb(219, 235, 228));
             foreach (var combo in new[] { scope, range }) {
                 combo.Foreground = primary; combo.Background = new SolidColorBrush(dark ? Color.FromRgb(31, 46, 57) : Color.FromRgb(233, 240, 244)); combo.BorderBrush = panel.BorderBrush;
                 var items = new Style(typeof(ComboBoxItem)); items.Setters.Add(new Setter(Control.ForegroundProperty, primary)); items.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(7, 5, 7, 5))); combo.ItemContainerStyle = items;
             }
-            amount.Foreground = new SolidColorBrush(dark ? Color.FromRgb(107, 227, 193) : Color.FromRgb(9, 115, 93));
+            amount.Foreground = new SolidColorBrush(dark ? Color.FromRgb(147, 214, 191) : Color.FromRgb(35, 122, 99));
             chart.Dark = dark; chart.InvalidateVisual();
         }
         private void OnSourceInitialized(object sender, EventArgs e) {
@@ -149,7 +204,7 @@ namespace CodexPetCredits {
             // Following uses SWP_NOACTIVATE. Explicit clicks may focus controls for keyboard access.
             if (!testMode) {
                 StartBackend();
-                hookCallback = delegate(IntPtr h, uint evt, IntPtr window, int obj, int child, uint thread, uint time) { if (window == petHandle && (evt == 0x8003 || evt == 0x8001)) Dispatcher.BeginInvoke(new Action(Hide)); };
+                hookCallback = delegate(IntPtr h, uint evt, IntPtr window, int obj, int child, uint thread, uint time) { if (window == follower.PetHandle && Native.IsWindowLifecycleEvent(evt, obj, child)) Dispatcher.BeginInvoke(new Action(delegate { if (!follower.Dragging && !Native.IsWindowVisible(window)) Hide(); })); };
                 hook = Native.SetWinEventHook(0x8000, 0x800B, IntPtr.Zero, hookCallback, 0, 0, 0);
                 followTimer.Tick += FollowPet; followTimer.Start();
             }
@@ -160,7 +215,11 @@ namespace CodexPetCredits {
             backend = new Process { StartInfo = start, EnableRaisingEvents = true };
             backend.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
                 if (String.IsNullOrEmpty(e.Data)) return;
-                try { var value = Json.Serializer.DeserializeObject(e.Data); if (Json.Text(value, "type") == "view") Dispatcher.BeginInvoke(new Action(delegate { UpdateView(value); })); } catch { }
+                try {
+                    var value = Json.Serializer.DeserializeObject(e.Data);
+                    if (Json.Text(value, "type") == "view") Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate { UpdateView(value); }));
+                    else if (Json.Text(value, "type") == "pet") lock (inbox) { queuedPet = value; if (!petQueued) { petQueued = true; Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(delegate { object latest; lock (inbox) { latest = queuedPet; petQueued = false; } follower.Observe(latest); })); } }
+                } catch { }
             };
             backend.ErrorDataReceived += delegate { }; // Protocol stderr is never displayed as user content.
             backend.Exited += delegate { Dispatcher.BeginInvoke(new Action(delegate { status.Text = "数据进程已退出，请重新启动挂件"; })); };
@@ -172,57 +231,46 @@ namespace CodexPetCredits {
         public void UpdateView(object data) {
             state = data; updating = true;
             var settings = Json.Get(data, "settings"); int nextDensity = (int)Json.Number(settings, "density"); if (nextDensity != density) SetDensity(nextDensity, false);
-            dark = Json.Text(settings, "theme", "dark") != "light"; backgroundOpacity = Json.Number(settings, "opacity", 90); opacity.Value = backgroundOpacity;
+            bool nextDark = Json.Text(settings, "theme", "dark") != "light"; double nextOpacity = Json.Number(settings, "opacity", 90);
+            bool themeChanged = nextDark != dark || nextOpacity != backgroundOpacity;
+            dark = nextDark; backgroundOpacity = nextOpacity; opacity.Value = backgroundOpacity;
+            // Dynamic legend/detail rows must take colors from the new theme, not the previous frame.
+            if (themeChanged) ApplyTheme();
             range.SelectedItem = Json.Text(settings, "range", "24h"); scope.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "current", "account", "tasks", "projects" }, Json.Text(settings, "scope", "current")));
             quotaLabel.Text = Json.Text(data, "quotaLabel", "CODEX · 周剩余"); amount.Text = Json.Get(data, "remaining") == null ? "—" : Json.Number(data, "remaining").ToString("0") + "%";
-            forecast.Text = Json.Text(data, "forecast", "正在学习"); forecast.ToolTip = Json.Text(data, "forecastDetail");
-            alert.Visibility = Json.Flag(data, "warning") ? Visibility.Visible : Visibility.Collapsed; alert.ToolTip = Json.Text(data, "forecastDetail");
-            subTitle.Text = Json.Text(data, "subtitle"); subTitle.ToolTip = subTitle.Text; total.Text = Json.Get(data, "total") == null ? "— cr" : Json.Number(data, "total").ToString("N2") + " cr";
+            forecast.Text = (Json.Flag(data, "warning") ? "!  " : "") + UiText.Short(Json.Text(data, "forecast", "正在学习"), 24);
+            forecast.ToolTip = Json.Flag(data, "warning") ? "按近期节奏，可能提前耗尽" : "结合使用习惯估算";
+            subTitle.Text = UiText.Short(Json.Text(settings, "scope") == "current" ? Json.Text(data, "followLabel", "最近活跃") + " · " + Json.Text(data, "taskTitle", Json.Text(data, "subtitle")) : Json.Text(data, "subtitle"), 28);
+            subTitle.ToolTip = null; total.Text = Json.Get(data, "total") == null ? "— cr" : Json.Number(data, "total").ToString("N1") + " cr";
             var curves = new List<double?[]>(); var names = new List<string>(); var labels = new List<string>();
             foreach (var series in Json.Items(Json.Get(data, "series"))) { names.Add(Json.Text(series, "name")); labels.Add(Json.Text(series, "name") + "  " + (Json.Get(series, "total") == null ? "—" : Json.Number(series, "total").ToString("0.##")) + " cr");
                 curves.Add(Json.Items(Json.Get(series, "points")).Select(x => x == null ? (double?)null : Convert.ToDouble(x)).ToArray()); }
-            chart.Names = names.ToArray(); chart.Start = Epoch(Json.Number(data, "windowStart")); chart.End = Epoch(Json.Number(data, "windowEnd")); chart.SetSeries(curves);
+            chart.Names = names.ToArray(); chart.ContextKey = Json.Text(data, "chartKey", Json.Text(settings, "scope") + ":" + Json.Text(settings, "range") + ":" + String.Join("|", names));
+            chart.Start = Epoch(Json.Number(data, "windowStart")); chart.End = Epoch(Json.Number(data, "windowEnd")); chart.SetSeries(curves);
             legend.Text = String.Join("  /  ", labels); reset.Text = "额度重置  " + Json.Text(data, "resetLabel");
-            detailRows.Children.Clear(); foreach (var row in Json.Items(Json.Get(data, "details"))) {
+            string signature = Json.Serializer.Serialize(new object[] { Json.Get(data, "details"), Json.Get(data, "other"), names, labels, dark });
+            if (signature != renderedDetails) {
+            renderedDetails = signature; legendRows.Children.Clear();
+            if (names.Count > 1) for (int i = 0; i < Math.Min(3, names.Count); i++) {
+                var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) }; grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(13) }); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.Children.Add(new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(CreditChart.Colors[i]), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left });
+                var name = new TextBlock { Text = UiText.Short(names[i], 22), FontSize = 10, Foreground = quotaLabel.Foreground, TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 17 }; Grid.SetColumn(name, 1); grid.Children.Add(name);
+                var series = Json.Items(Json.Get(data, "series")).ElementAt(i); var number = new TextBlock { Text = Json.Get(series, "total") == null ? "—" : Json.Number(series, "total").ToString("0.#") + " cr", FontSize = 10, Foreground = quotaLabel.Foreground, Margin = new Thickness(8, 0, 0, 0) }; Grid.SetColumn(number, 2); grid.Children.Add(number); legendRows.Children.Add(grid);
+            }
+            detailRows.Children.Clear(); foreach (var row in Json.Items(Json.Get(data, "details")).Take(4)) {
                 var grid = new DockPanel { Margin = new Thickness(0, 7, 0, 0) };
                 var value = new TextBlock { Text = Json.Text(row, "value"), FontSize = 11, HorizontalAlignment = HorizontalAlignment.Right, Foreground = amount.Foreground };
                 DockPanel.SetDock(value, Dock.Right); grid.Children.Add(value);
-                grid.Children.Add(new TextBlock { Text = Json.Text(row, "name"), FontSize = 11, Foreground = quotaLabel.Foreground, TextTrimming = TextTrimming.CharacterEllipsis }); detailRows.Children.Add(grid);
+                grid.Children.Add(new TextBlock { Text = UiText.Short(Json.Text(row, "name"), 26), FontSize = 11, Foreground = quotaLabel.Foreground, TextTrimming = TextTrimming.CharacterEllipsis }); detailRows.Children.Add(grid);
             }
-            other.Text = String.Join("\n", Json.Items(Json.Get(data, "other")).Select(Convert.ToString));
-            coverage.Text = Json.Text(data, "coverage") + "\n费率版本 " + Json.Text(data, "rateVersion");
-            status.Text = Json.Text(data, "status") + (Json.Get(data, "updated") == null ? "" : " · " + Json.Number(data, "updated").ToString("0") + " 秒前更新");
-            ApplyTheme(); updating = false;
+            other.Text = String.Join("\n", Json.Items(Json.Get(data, "other")).Take(3).Select(x => UiText.Short(Convert.ToString(x), 45)));
+            }
+            coverage.Text = Json.Text(data, "coverage") + "\n\n" + Json.Text(data, "forecastDetail") + "\n\n费率 " + Json.Text(data, "rateVersion");
+            status.Text = (Json.Get(data, "updated") == null ? "等待额度数据" : Json.Number(data, "updated") > 300 ? "更新暂停" : "额度已更新") + " · 本机估算";
+            updating = false;
         }
         private static DateTime Epoch(double milliseconds) { return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(milliseconds).ToLocalTime(); }
-        private void FollowPet(object sender, EventArgs e) {
-            var now = DateTime.UtcNow;
-            if ((now - lastDiscover).TotalSeconds >= 1) {
-                var ids = Native.CodexProcesses(); lastDiscover = now;
-                if (ids.Count > 0) { hadCodex = true; missingSince = DateTime.MinValue; }
-                else { if (missingSince == DateTime.MinValue) missingSince = now; if ((hadCodex || (now - missingSince).TotalSeconds > 30) && (now - missingSince).TotalSeconds > 3) { Close(); return; } }
-                var mascot = Json.Get(state, "pet"); petHandle = Native.FindPet(ids, Json.Number(mascot, "innerWidth"), Json.Number(mascot, "dpr", 1));
-            }
-            var pet = Json.Get(state, "pet");
-            if (petHandle == IntPtr.Zero || !Native.IsWindow(petHandle) || !Native.IsWindowVisible(petHandle) || pet == null || !Json.Flag(state, "petPageVisible")) { if (IsVisible) Hide(); firstPosition = true; return; }
-            var origin = new Native.Point(); Native.ClientToScreen(petHandle, ref origin);
-            double petDpr = Json.Number(pet, "dpr", 1), px = origin.X + Json.Number(pet, "x") * petDpr, py = origin.Y + Json.Number(pet, "y") * petDpr;
-            double pw = Json.Number(pet, "width") * petDpr, ph = Json.Number(pet, "height") * petDpr;
-            if (pw <= 0 || ph <= 0) { Hide(); return; }
-            var work = Native.WorkArea((int)(px + pw / 2), (int)(py + ph / 2));
-            double dpi = Native.GetDpiForWindow(petHandle) / 96.0;
-            MaxHeight = Math.Max(150, work.Height / dpi - 24);
-            double w = Width * dpi, h = Math.Max(100, ActualHeight) * dpi, gap = 10 * dpi;
-            double x = px + pw / 2 - w / 2, y = py - h - gap;
-            if (y < work.Top + gap) y = py + ph + gap;
-            x = Math.Max(work.Left + gap, Math.Min(x, work.Right - w - gap)); y = Math.Max(work.Top + gap, Math.Min(y, work.Bottom - h - gap));
-            double dt = Math.Min(.1, Math.Max(.001, (now - lastFrame).TotalSeconds)); lastFrame = now;
-            double factor = SystemParameters.ClientAreaAnimation ? 1 - Math.Exp(-dt / .045) : 1;
-            if (firstPosition || Math.Abs(x - physicalX) > 600 || Math.Abs(y - physicalY) > 600) { physicalX = x; physicalY = y; firstPosition = false; }
-            else { physicalX += (x - physicalX) * factor; physicalY += (y - physicalY) * factor; }
-            Native.SetWindowPos(hwnd, new IntPtr(-1), (int)Math.Round(physicalX), (int)Math.Round(physicalY), 0, 0, 0x0010 | 0x0001);
-            if (!IsVisible) Show();
-        }
+        private void FollowPet(object sender, EventArgs e) { follower.Tick(this, hwnd); }
         public void RenderTo(string filename) {
             chart.FinishAnimation();
             Measure(new Size(Width, 1000)); Arrange(new Rect(0, 0, Width, DesiredSize.Height)); UpdateLayout();

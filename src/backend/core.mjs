@@ -99,6 +99,13 @@ export function bucketCredits(events, start, end, count = 48) {
   return values.map((value, i) => ({ time: start + (i + 0.5) * width, value: unknown[i] ? null : value }));
 }
 
+export function chartWindow(now, duration, count = 48) {
+  // Anchor buckets to clock boundaries; a half-second UI refresh must not rebucket old usage.
+  const width = duration / count;
+  const end = (Math.floor(now / width) + 1) * width;
+  return { start: end - duration, end };
+}
+
 export function monotoneSegments(points) {
   // Monotone cubic interpolation: smooth curves without invented extrema.
   if (points.length < 2) return [];

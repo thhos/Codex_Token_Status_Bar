@@ -1,6 +1,7 @@
+param([string]$OutputDirectory = 'build')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$outputDir = Join-Path $projectRoot 'build'
+$outputDir = Join-Path $projectRoot $OutputDirectory
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $frameworkDir = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $compiler = Join-Path $frameworkDir 'csc.exe'
@@ -13,4 +14,4 @@ $sources = Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src\windows') -Fi
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 "/out:$outputDir\CodexPetCredits.exe" "/win32manifest:$projectRoot\src\windows\app.manifest" @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'WPF build failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'src\windows\App.config') -Destination (Join-Path $outputDir 'CodexPetCredits.exe.config') -Force
-Write-Output 'Built build\CodexPetCredits.exe (no external packages).'
+Write-Output "Built $OutputDirectory\CodexPetCredits.exe (no external packages)."

@@ -1,5 +1,6 @@
 prev/
 build/
+build-next/
 artifacts/
 *.log
 node_modules/

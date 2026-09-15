@@ -28,6 +28,9 @@ namespace CodexPetCredits {
         [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc callback, uint pid, uint thread, uint flags);
         [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hook);
         [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+        [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
+        public static bool IsWindowLifecycleEvent(uint evt, int obj, int child) { return obj == 0 && child == 0 && (evt == 0x8003 || evt == 0x8001); }
 
         public static HashSet<uint> CodexProcesses() {
             var ids = new HashSet<uint>();
@@ -45,7 +48,7 @@ namespace CodexPetCredits {
                 long ex = GetWindowLongPtr(hwnd, -20).ToInt64(), style = GetWindowLongPtr(hwnd, -16).ToInt64();
                 if (name.ToString() != "Chrome_WidgetWin_1" || (ex & 0x88) != 0x88 || (style & 0xC00000) != 0) return true;
                 Rect client; GetClientRect(hwnd, out client);
-                if (innerWidth > 0 && Math.Abs(client.Width - innerWidth * dpr) > 8) return true;
+                // DOM sizes can lag native resizes during a drag. A unique native candidate remains valid.
                 candidates.Add(hwnd); return true;
             }, IntPtr.Zero);
             // Ambiguous candidates are not silently attached to an unrelated tool window.
