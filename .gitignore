@@ -1,0 +1,7 @@
+prev/
+build/
+artifacts/
+*.log
+node_modules/
+.DS_Store
+*.lnk
