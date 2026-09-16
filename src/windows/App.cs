@@ -57,8 +57,11 @@ namespace CodexPetCredits {
         private readonly CreditChart chart = new CreditChart();
         private readonly Slider opacity = new Slider { Minimum = 40, Maximum = 100, Value = 90, Width = 145 };
         private readonly Popup titlePopup = new Popup { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
+        private readonly Popup selectionPopup = new Popup { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
         private TextBlock amount, quotaLabel, forecast, forecastLabel, subTitle, total, totalLabel, intervalLabel, recentHour, recentDay, reset, status, coverage;
         private Button smoothButton, themeButton;
+        private Button selectionButton, titleButton;
+        private TextBlock resetDate, resetTime, resetCoupons;
         private Expander modelsDisclosure, accountsDisclosure;
         private Brush primary, muted, accentBrush;
 
@@ -74,7 +77,7 @@ namespace CodexPetCredits {
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if(e.Key == Key.Escape) { titlePopup.IsOpen = false; preferences.Visibility = Visibility.Collapsed; ChangeSetting("density",0); } };
             SourceInitialized += OnSourceInitialized;
             Closed += delegate {
-                hiddenTimer.Stop(); CompositionTarget.Rendering -= OnRendering; titlePopup.IsOpen = false;
+                hiddenTimer.Stop(); CompositionTarget.Rendering -= OnRendering; titlePopup.IsOpen = false; selectionPopup.IsOpen = false;
                 if(hook != IntPtr.Zero)Native.UnhookWinEvent(hook);
                 Send(new Dictionary<string,object>{{"type","shutdown"}});
                 if(backend != null)try{backend.StandardInput.Close();}catch{}
@@ -102,38 +105,42 @@ namespace CodexPetCredits {
             for(int i=0;i<3;i++){int mode=i;var button=ActionButton(icons[i],new[]{"极简","趋势","详细"}[i],delegate{ChangeSetting("density",density==mode?0:mode);});button.Content=new System.Windows.Shapes.Path{Data=Geometry.Parse(paths[i]),Stroke=Brushes.Gray,StrokeThickness=1.3,Width=12,Height=12,Stretch=Stretch.Uniform};modeButtons.Add(button);modes.Children.Add(button);}
             modes.Children.Add(ActionButton("⋯","外观设置",delegate{preferences.Visibility=preferences.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;}));
             header.Children.Add(Text("CODEX  /  用量",10));layout.Children.Add(header);
-            var summary = new Grid();summary.ColumnDefinitions.Add(new ColumnDefinition());summary.ColumnDefinitions.Add(new ColumnDefinition());
-            var quota = new StackPanel();amount=Text("—",28,true);quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);
+            var summary = new Grid();for(int i=0;i<3;i++)summary.ColumnDefinitions.Add(new ColumnDefinition());
+            var quota = new StackPanel();amount=Text("—",26,true);amount.Height=36;quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);quota.Children.Add(Text(" ",10));
             summary.Children.Add(Card(quota,new Thickness(0,0,4,0)));
-            var prediction = new StackPanel();forecast=Text("学习中",16,true);forecast.MinHeight=36;forecastLabel=Text("耗尽预测",10);prediction.Children.Add(forecast);prediction.Children.Add(forecastLabel);
-            var predictionCard=Card(prediction,new Thickness(4,0,0,0));Grid.SetColumn(predictionCard,1);summary.Children.Add(predictionCard);layout.Children.Add(summary);
+            var prediction = new StackPanel();forecast=Text("学习中",26,true);forecast.Height=36;forecastLabel=Text("耗尽预测",10);prediction.Children.Add(forecast);prediction.Children.Add(forecastLabel);prediction.Children.Add(Text(" ",10));
+            var predictionCard=Card(prediction,new Thickness(2,0,2,0));Grid.SetColumn(predictionCard,1);summary.Children.Add(predictionCard);
+            var resetStack=new StackPanel();resetDate=Text("—",26,true);resetDate.Height=36;resetTime=Text("额度重置",10);resetCoupons=Text("券数读取中",10);resetStack.Children.Add(resetDate);resetStack.Children.Add(resetTime);resetStack.Children.Add(resetCoupons);
+            var resetCard=Card(resetStack,new Thickness(4,0,0,0));Grid.SetColumn(resetCard,2);summary.Children.Add(resetCard);layout.Children.Add(summary);
             layout.Children.Add(trend);trend.Margin=new Thickness(0,10,0,0);
-            var filters = new DockPanel();
-            ConfigureCombo(range,new[]{"1h","6h","24h","7d","30d"},72,"时间窗口");
-            ConfigureCombo(scope,new[]{"当前任务","本机汇总","主要任务","主要项目"},112,"统计范围");
-            DockPanel.SetDock(range,Dock.Right);filters.Children.Add(range);filters.Children.Add(scope);trend.Children.Add(filters);
+            var filters = new StackPanel { VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(10,0,0,0) };
+            ConfigureCombo(range,new[]{"1h","6h","24h","7d","30d"},104,"时间窗口");
+            ConfigureCombo(scope,new[]{"当前任务","本机汇总","主要任务","主要项目"},104,"统计范围");
+            scope.Height=range.Height=25;range.Margin=new Thickness(0,4,0,0);filters.Children.Add(scope);filters.Children.Add(range);
             scope.SelectionChanged+=delegate{if(!updating && scope.SelectedIndex>=0)ChangeSetting("scope",new[]{"current","account","tasks","projects"}[scope.SelectedIndex]);};
             range.SelectionChanged+=delegate{if(!updating && range.SelectedItem!=null)ChangeSetting("range",range.SelectedItem.ToString());};
             subTitle=Text("正在读取任务",10);subTitle.MaxHeight=18;
-            var titleButton=ActionButton("","查看完整名称",delegate{ShowTitle(subTitle.Tag as string ?? subTitle.Text);},Double.NaN);
+            titleButton=ActionButton("","查看完整名称",delegate{ShowTitle(subTitle.Tag as string ?? subTitle.Text);},Double.NaN);
             titleButton.Content=subTitle;titleButton.HorizontalContentAlignment=HorizontalAlignment.Left;titleButton.Height=23;titleButton.Padding=new Thickness(0);titleButton.Margin=new Thickness(0,3,0,3);titleButton.BorderThickness=new Thickness(0);
-            titlePopup.PlacementTarget=titleButton;trend.Children.Add(titleButton);
-            var totalStack=new StackPanel();total=Text("— cr",23,true);totalLabel=Text("所选时段 · 估算消耗合计",10);totalStack.Children.Add(total);totalStack.Children.Add(totalLabel);
-            trend.Children.Add(Card(totalStack,new Thickness(0,0,0,7)));
+            titlePopup.PlacementTarget=titleButton;
+            var totalStack=new StackPanel { VerticalAlignment=VerticalAlignment.Center };total=Text("— cr",25,true);totalLabel=Text("时段消耗",10);totalStack.Children.Add(total);totalStack.Children.Add(totalLabel);
+            var totalGrid=new Grid();totalGrid.ColumnDefinitions.Add(new ColumnDefinition());totalGrid.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});totalGrid.Children.Add(totalStack);Grid.SetColumn(filters,1);totalGrid.Children.Add(filters);
+            trend.Children.Add(Card(totalGrid,new Thickness(0,0,0,4)));trend.Children.Add(titleButton);
+            selectionButton=ActionButton("选择任务","选择要比较的任务或项目",ShowSelection,Double.NaN);selectionButton.HorizontalAlignment=HorizontalAlignment.Left;selectionButton.Margin=new Thickness(0,0,0,5);selectionButton.Visibility=Visibility.Collapsed;trend.Children.Add(selectionButton);selectionPopup.PlacementTarget=selectionButton;
             var chartHeader=new DockPanel();
             smoothButton=ActionButton("平滑","切换平滑趋势或区间原值",delegate{ChangeSetting("smoothing",Json.Text(settings,"smoothing","smooth")=="smooth"?"raw":"smooth");},48);
             smoothButton.Height=23;DockPanel.SetDock(smoothButton,Dock.Right);chartHeader.Children.Add(smoothButton);
-            intervalLabel=Text("估算 credits / 区间",10);chartHeader.Children.Add(intervalLabel);trend.Children.Add(chartHeader);
+            intervalLabel=Text("消耗趋势",10);chartHeader.Children.Add(intervalLabel);trend.Children.Add(chartHeader);
             chart.Height=108;trend.Children.Add(chart);legendRows.Margin=new Thickness(0,3,0,0);trend.Children.Add(legendRows);
             layout.Children.Add(detail);detail.Margin=new Thickness(0,10,0,0);
             var recent = new Grid();recent.ColumnDefinitions.Add(new ColumnDefinition());recent.ColumnDefinitions.Add(new ColumnDefinition());
-            var hourStack=new StackPanel();recentHour=Text("—",19,true);hourStack.Children.Add(recentHour);hourStack.Children.Add(Text("本机近 1h · 估算 cr",10));
+            var hourStack=new StackPanel();recentHour=Text("—",19,true);hourStack.Children.Add(recentHour);hourStack.Children.Add(Text("本机近 1h",10));
             recent.Children.Add(Card(hourStack,new Thickness(0,0,4,0)));
-            var dayStack=new StackPanel();recentDay=Text("—",19,true);dayStack.Children.Add(recentDay);dayStack.Children.Add(Text("本机近 24h · 估算 cr",10));
+            var dayStack=new StackPanel();recentDay=Text("—",19,true);dayStack.Children.Add(recentDay);dayStack.Children.Add(Text("本机近 24h",10));
             var dayCard=Card(dayStack,new Thickness(4,0,0,0));Grid.SetColumn(dayCard,1);recent.Children.Add(dayCard);detail.Children.Add(recent);
             modelsDisclosure=Disclosure("模型构成 · 所选时段",modelRows);detail.Children.Add(modelsDisclosure);
             accountsDisclosure=Disclosure("其他额度",accountRows);detail.Children.Add(accountsDisclosure);
-            reset=Text("",10);reset.Margin=new Thickness(0,7,0,0);detail.Children.Add(reset);
+            reset=Text("",10);
             status=Text("正在连接",10);status.Margin=new Thickness(0,4,0,0);detail.Children.Add(status);
             preferences.Visibility=Visibility.Collapsed;preferences.Margin=new Thickness(0,12,0,0);layout.Children.Add(preferences);
             preferences.Children.Add(Text("主题色",10));var swatches=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,6,0,10)};
@@ -162,13 +169,39 @@ namespace CodexPetCredits {
             var text=new TextBox{Text=title,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,MaxHeight=150,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,BorderThickness=new Thickness(0),Padding=new Thickness(12),FontSize=12,Foreground=primary,Background=new SolidColorBrush(dark?Color.FromRgb(34,37,44):Color.FromRgb(246,246,250))};
             titlePopup.Child=new Border{Child=text,Width=300,CornerRadius=new CornerRadius(9)};titlePopup.IsOpen=!titlePopup.IsOpen;
         }
+        // Work on a draft so checking several rows never rebuilds or closes the popup mid-selection.
+        private void ShowSelection() {
+            if(selectionPopup.IsOpen){selectionPopup.IsOpen=false;return;}
+            string key=Json.Text(settings,"scope")=="projects"?"selectedProjects":"selectedTasks";
+            var choices=Json.Items(Json.Get(state,"comparisonChoices")).ToArray();
+            var draft=Json.Get(settings,key)==null?new HashSet<string>(choices.Where(c=>Json.Flag(c,"selected")).Select(c=>Json.Text(c,"id"))):new HashSet<string>(Json.Items(Json.Get(settings,key)).Select(Convert.ToString));
+            var content=new StackPanel();var count=new TextBlock{Foreground=muted,FontSize=11,Margin=new Thickness(0,0,0,8)};content.Children.Add(count);
+            var search=new TextBox{FontSize=12,Padding=new Thickness(6),Margin=new Thickness(0,0,0,6),Foreground=primary,Background=panel.Background};AutomationProperties.SetName(search,"搜索任务或项目");content.Children.Add(search);
+            var rows=new StackPanel();content.Children.Add(new ScrollViewer{Content=rows,MaxHeight=250,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});
+            var checks=new List<CheckBox>();Action updateCount=delegate{count.Text="最多 5 项 · 已选 "+draft.Count;foreach(var box in checks)box.IsEnabled=box.IsChecked==true || draft.Count<5;};
+            Action populate=delegate{
+                rows.Children.Clear();checks.Clear();
+                foreach(var choice in choices){string id=Json.Text(choice,"id"),name=Json.Text(choice,"name");if((name+id).IndexOf(search.Text,StringComparison.OrdinalIgnoreCase)<0)continue;
+                    var box=new CheckBox{Tag=id,Content=new TextBlock{Text=name,MaxWidth=265,TextTrimming=TextTrimming.CharacterEllipsis,Foreground=primary},IsChecked=draft.Contains(id),Margin=new Thickness(1,6,1,6),ToolTip=UiText.Short(name,60)};
+                    box.Checked+=delegate{draft.Add(id);updateCount();};box.Unchecked+=delegate{draft.Remove(id);updateCount();};rows.Children.Add(box);checks.Add(box);
+                }
+                if(checks.Count==0)rows.Children.Add(new TextBlock{Text="没有匹配项",Foreground=muted,Margin=new Thickness(0,8,0,8)});updateCount();
+            };
+            search.TextChanged+=delegate{populate();};populate();
+            var actions=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,10,0,0)};
+            var automatic=ActionButton("自动前三","恢复自动选择",delegate{selectionPopup.IsOpen=false;ChangeSetting(key,null);},80);
+            var apply=ActionButton("应用","应用所选任务或项目",delegate{selectionPopup.IsOpen=false;ChangeSetting(key,choices.Select(c=>Json.Text(c,"id")).Where(draft.Contains).ToArray());},62);
+            automatic.Foreground=muted;apply.Foreground=accentBrush;apply.BorderBrush=accentBrush;actions.Children.Add(automatic);actions.Children.Add(apply);content.Children.Add(actions);
+            selectionPopup.Child=new Border{Child=content,Width=330,Padding=new Thickness(12),CornerRadius=new CornerRadius(10),BorderThickness=new Thickness(1),BorderBrush=panel.BorderBrush,Background=new SolidColorBrush(dark?Color.FromRgb(32,35,43):Color.FromRgb(247,247,250))};
+            selectionPopup.IsOpen=true;
+        }
         private void ChangeSetting(string key,object value) {
             settings[key]=value;if(!testMode)pendingSettings[key]=value;
             ApplySettings();UpdateContent();Send(new Dictionary<string,object>{{"type","settings"},{key,value}});
         }
         private void ApplySettings() {
             updating=true;density=(int)Json.Number(settings,"density");dark=Json.Text(settings,"theme","dark")!="light";accent=Json.Text(settings,"accent","mint");
-            Width=density==0?320:352;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
+            Width=368;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
             scope.SelectedIndex=Math.Max(0,Array.IndexOf(new[]{"current","account","tasks","projects"},Json.Text(settings,"scope","current")));range.SelectedItem=Json.Text(settings,"range","24h");
             opacity.Value=Json.Number(settings,"opacity",90);themeButton.Content=dark?"深色":"浅色";smoothButton.Content=Json.Text(settings,"smoothing","smooth")=="smooth"?"平滑":"原值";
             ApplyTheme();updating=false;
@@ -186,7 +219,7 @@ namespace CodexPetCredits {
             foreach(var button in modeButtons){button.Foreground=muted;button.BorderBrush=Brushes.Transparent;button.Background=Brushes.Transparent;}
             modeButtons[density].Foreground=accentBrush;modeButtons[density].Background=new SolidColorBrush(Color.FromArgb(25,tint.R,tint.G,tint.B));
             foreach(var button in modeButtons)((System.Windows.Shapes.Path)button.Content).Stroke=button.Foreground;
-            smoothButton.Foreground=muted;smoothButton.BorderBrush=panel.BorderBrush;themeButton.Foreground=primary;themeButton.BorderBrush=panel.BorderBrush;
+            smoothButton.Foreground=muted;smoothButton.BorderBrush=panel.BorderBrush;themeButton.Foreground=primary;themeButton.BorderBrush=panel.BorderBrush;selectionButton.Foreground=muted;selectionButton.BorderBrush=panel.BorderBrush;
             for(int i=0;i<colorButtons.Count;i++){var button=colorButtons[i];button.Content=new System.Windows.Shapes.Ellipse{Width=13,Height=13,Fill=new SolidColorBrush(Palette.Accent(Palette.Keys[i],dark))};button.BorderBrush=Palette.Keys[i]==accent?accentBrush:Brushes.Transparent;}
             foreach(var combo in new[]{scope,range}){
                 combo.Foreground=primary;combo.Background=new SolidColorBrush(dark?Color.FromRgb(37,40,49):Color.FromRgb(240,240,246));combo.BorderBrush=panel.BorderBrush;
@@ -197,7 +230,7 @@ namespace CodexPetCredits {
         public void UpdateView(object data) {
             state=data;var received=new Dictionary<string,object>(Json.Map(Json.Get(data,"settings")));
             // A delayed view must not undo a menu choice while its settings acknowledgement is in flight.
-            foreach(var entry in pendingSettings.ToArray()){if(Json.Text(received,entry.Key)==Convert.ToString(entry.Value))pendingSettings.Remove(entry.Key);else received[entry.Key]=entry.Value;}
+            foreach(var entry in pendingSettings.ToArray()){if(Json.Serializer.Serialize(Json.Get(received,entry.Key))==Json.Serializer.Serialize(entry.Value))pendingSettings.Remove(entry.Key);else received[entry.Key]=entry.Value;}
             string oldSettings=Json.Serializer.Serialize(settings);settings=received;
             if(oldSettings!=Json.Serializer.Serialize(settings))ApplySettings();
             UpdateContent();
@@ -207,23 +240,28 @@ namespace CodexPetCredits {
             if(state==null)return;
             amount.Text=Json.Get(state,"remaining")==null?"—":Json.Number(state,"remaining").ToString("0")+"%";
             quotaLabel.Text=Json.Text(state,"quotaLabel").Contains("周")?"周额度剩余":"额度剩余";
-            string prediction=Json.Text(state,"forecast","正在学习");
-            forecast.Text=prediction=="正在学习"?"学习中":prediction=="预计可用至重置"?"可用至重置":prediction.Replace("预计 ","").Replace(" 耗尽","");
-            forecast.FontSize=forecast.Text.Length>13?13:16;
-            forecastLabel.Text=Json.Flag(state,"warning")?"!  预计提前耗尽":"耗尽时间预测";
+            forecast.Text=Json.Text(Json.Get(state,"forecastDisplay"),"value","学习中");
+            forecastLabel.Text=(Json.Flag(state,"warning")?"! ":"")+Json.Text(Json.Get(state,"forecastDisplay"),"label","耗尽预测");
+            forecastLabel.ToolTip=Json.Flag(state,"warning")?"预计在重置前耗尽":"结合工作习惯估计";
+            resetDate.Text=Json.Text(state,"resetDate","—");resetTime.Text=Json.Text(state,"resetTime")+" 重置";
+            resetCoupons.Text=Json.Get(state,"resetCreditCount")==null?"券数暂不可用":"重置券 "+Json.Number(state,"resetCreditCount").ToString("0")+" 张";
             forecast.ToolTip="结合工作习惯与近期速度";
             string title=Json.Text(settings,"scope","current")=="current"?Json.Text(state,"taskTitle","暂无任务"):Json.Text(state,"subtitle","本机已记录");
             subTitle.Tag=title;subTitle.Text=UiText.Short(title,30);
+            string scopeKey=Json.Text(settings,"scope","current");bool comparison=scopeKey=="tasks" || scopeKey=="projects";
+            titleButton.Visibility=scopeKey=="current"?Visibility.Visible:Visibility.Collapsed;selectionButton.Visibility=comparison?Visibility.Visible:Visibility.Collapsed;
+            selectionButton.Content="选择"+(scopeKey=="projects"?"项目":"任务")+" · "+Json.Items(Json.Get(state,"series")).Count()+" 项";
             total.Text=Credit(state,"total")+" cr";
-            totalLabel.Text=Json.Text(state,"totalLabel","所选范围 · 所选时段合计")+" · 估算";
+            totalLabel.Text=comparison?"已选合计":"时段消耗";
             totalLabel.ToolTip="图中曲线在所选时段内的消耗合计";
             double minutes=(Json.Number(state,"windowEnd")-Json.Number(state,"windowStart"))/48/60000;
-            intervalLabel.Text="credits / "+(minutes<60?minutes.ToString("0.##")+" 分钟":(minutes/60).ToString("0.##")+" 小时");
+            intervalLabel.Text="消耗趋势";
             var series=Json.Items(Json.Get(state,"series")).ToArray();
             chart.Names=series.Select(s=>Json.Text(s,"name")).ToArray();
             chart.Smooth=Json.Text(settings,"smoothing","smooth")=="smooth";
             chart.ContextKey=Json.Text(state,"chartKey",Json.Text(settings,"scope")+":"+Json.Text(settings,"range")+":"+String.Join("|",chart.Names))+":"+chart.Smooth;
             chart.Start=Epoch(Json.Number(state,"windowStart"));chart.End=Epoch(Json.Number(state,"windowEnd"));
+            chart.ObservedAt=Json.Get(state,"observedAt")==null?chart.End:Epoch(Json.Number(state,"observedAt"));
             chart.SetSeries(series.Select(s=>Json.Items(Json.Get(s,"points")).Select(v=>v==null?(double?)null:Convert.ToDouble(v)).ToArray()).ToList());
             recentHour.Text=Credit(Json.Get(state,"recentCredits"),"hour");recentDay.Text=Credit(Json.Get(state,"recentCredits"),"day");
             reset.Text="额度重置  "+Json.Text(state,"resetLabel");
@@ -232,7 +270,7 @@ namespace CodexPetCredits {
             string signature=Json.Serializer.Serialize(new object[]{series.Select(s=>new[]{Json.Text(s,"name"),Credit(s,"total")}),Json.Get(state,"details"),Json.Get(state,"other"),Json.Get(state,"officialTaskCredits"),dark,accent});
             if(signature==detailSignature)return;detailSignature=signature;
             legendRows.Children.Clear();
-            if(series.Length>1)for(int i=0;i<Math.Min(3,series.Length);i++)AddRow(legendRows,Json.Text(series[i],"name"),Credit(series[i],"total")+" cr",Palette.Series(accent,dark,i));
+            if(series.Length>1)for(int i=0;i<Math.Min(5,series.Length);i++)AddRow(legendRows,Json.Text(series[i],"name"),Credit(series[i],"total")+" cr",Palette.Series(accent,dark,i));
             modelRows.Children.Clear();
             foreach(var model in Json.Items(Json.Get(state,"details")).Take(5))AddRow(modelRows,Json.Text(model,"name"),Json.Text(model,"value"),null);
             if(modelRows.Children.Count==0)AddRow(modelRows,"暂无模型记录","—",null);
@@ -251,7 +289,7 @@ namespace CodexPetCredits {
         private void OnRendering(object sender,EventArgs args) {
             var frame=args as RenderingEventArgs;if(frame!=null && frame.RenderingTime==lastRendering)return;if(frame!=null)lastRendering=frame.RenderingTime;
             if(IsVisible)follower.Tick(this,hwnd);
-            if(follower.Dragging){scope.IsDropDownOpen=false;range.IsDropDownOpen=false;titlePopup.IsOpen=false;}
+            if(follower.Dragging){scope.IsDropDownOpen=false;range.IsDropDownOpen=false;titlePopup.IsOpen=false;selectionPopup.IsOpen=false;}
         }
         private void OnSourceInitialized(object sender,EventArgs e) {
             hwnd=new WindowInteropHelper(this).Handle;Native.SetWindowLongPtr(hwnd,-20,new IntPtr(Native.GetWindowLongPtr(hwnd,-20).ToInt64()|0x80));

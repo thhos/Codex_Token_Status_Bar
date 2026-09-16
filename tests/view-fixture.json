@@ -10,6 +10,15 @@
   "remaining": 64,
   "quotaLabel": "CODEX · 周剩余",
   "forecast": "预计 9/19 16:30 耗尽",
+  "forecastDisplay": { "value": "下午", "label": "9/19 耗尽" },
+  "resetDate": "9/21",
+  "resetTime": "12:16",
+  "resetCreditCount": 3,
+  "comparisonChoices": [
+    { "id": "project-a", "name": "Status Bar", "selected": true, "total": 86.22 },
+    { "id": "project-b", "name": "Research", "selected": true, "total": 40.2 },
+    { "id": "project-c", "name": "Website", "selected": false, "total": 3 }
+  ],
   "forecastDetail": "示例数据：按工作习惯与近期速度预计提前耗尽",
   "warning": true,
   "subtitle": "演示数据 · 主要项目",

@@ -104,6 +104,30 @@ public static class FrontendRegression {
                 foreach(var expander in Descendants(window).OfType<Expander>().ToArray())expander.IsExpanded=true;window.UpdateLayout();Require(window.ActualHeight<850,"details overflow the panel");
             }finally{window.Close();}
         });
+        Check("chart hover opens immediately and shows rates for completed and partial intervals", delegate {
+            var start=new DateTime(2026,9,16,9,0,0);var chart=new CreditChart{Start=start,End=start.AddMinutes(2),ObservedAt=start.AddSeconds(90)};
+            chart.SetSeries(new List<double?[]>{new double?[]{12,24}});
+            Require(chart.DescribeBucket(0).Contains("12 cr/min"),"full-interval speed is wrong");
+            Require(chart.DescribeBucket(1).Contains("48 cr/min") && chart.DescribeBucket(1).Contains("09:01:30"),"partial interval speed/time is wrong");
+            var window=new Window{Content=chart,Width=350,Height=180,ShowActivated=false};window.Show();window.UpdateLayout();
+            try{typeof(CreditChart).GetField("hover",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(chart,1);typeof(CreditChart).GetMethod("UpdateTooltip",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(chart,null);Require(((ToolTip)chart.ToolTip).IsOpen,"hover tip did not open");}
+            finally{window.Close();}
+        });
+        Check("summary typography aligns and task/project checkboxes apply a draft", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=1;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();
+            Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            try{var amount=(TextBlock)field("amount");var forecast=(TextBlock)field("forecast");var reset=(TextBlock)field("resetDate");
+                Require(amount.FontSize==forecast.FontSize && amount.FontSize==reset.FontSize,"summary fonts differ");
+                Require(Math.Abs(amount.TranslatePoint(new Point(),window).Y-forecast.TranslatePoint(new Point(),window).Y)<1,"summary baselines differ");
+                typeof(CompanionWindow).GetMethod("ShowSelection",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,null);
+                var popup=(System.Windows.Controls.Primitives.Popup)field("selectionPopup");popup.Child.UpdateLayout();var boxes=Descendants(popup.Child).OfType<CheckBox>().ToArray();Require(boxes.Length==3,"comparison options missing");
+                boxes[0].IsChecked=false;boxes[2].IsChecked=true;
+                var apply=Descendants(popup.Child).OfType<Button>().First(b=>Convert.ToString(b.Content)=="应用");apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var saved=(Dictionary<string,object>)field("settings");var ids=(string[])saved["selectedProjects"];Require(ids.SequenceEqual(new[]{"project-b","project-c"}),"checkbox draft did not apply");Require(!popup.IsOpen,"picker did not close after apply");
+            }finally{window.Close();}
+        });
         return failures == 0 ? 0 : 1;
     }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root) {

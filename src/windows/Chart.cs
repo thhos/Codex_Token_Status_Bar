@@ -20,7 +20,7 @@ namespace CodexPetCredits {
         public bool Smooth;
         public string Accent = "mint";
         public string[] Names = new string[0];
-        public DateTime Start, End;
+        public DateTime Start, End, ObservedAt;
         public static readonly Color[] Colors = { Color.FromRgb(95,188,164), Color.FromRgb(144,158,236), Color.FromRgb(222,169,106) };
         private Rect Plot { get { return new Rect(2, 22, Math.Max(1, ActualWidth-4), Math.Max(1, ActualHeight-45)); } }
         public CreditChart() {
@@ -45,7 +45,7 @@ namespace CodexPetCredits {
             raw=values; if(Smooth) values=values.Select(CurveSmoothing.Apply).ToList();
             bool contextChanged=appliedKey!=ContextKey;
             bool same=!contextChanged && values.Count==target.Count && values.Select((row,i)=>row.SequenceEqual(target[i])).All(x=>x);
-            if(same)return;
+            if(same){if(hover>=0)UpdateTooltip();return;}
             var current=Current(); double currentMax=CurrentMax();
             double peak=values.SelectMany(x=>x).Where(x=>x.HasValue).Select(x=>x.Value).DefaultIfEmpty(0).Max();
             double exponent=peak<=0?1:Math.Pow(10,Math.Floor(Math.Log10(peak))), normalized=peak/exponent;
@@ -74,12 +74,26 @@ namespace CodexPetCredits {
         private void UpdateTooltip(){
             if(hover<0 || target.Count==0)return;
             int count=target[0].Length; if(count==0)return;
-            var lines=new List<string>{Start.AddTicks((End-Start).Ticks*hover/count).ToString("MM/dd HH:mm")+" · 区间原值"};
-            for(int i=0;i<Math.Min(3,raw.Count);i++)if(hover<raw[i].Length)lines.Add(UiText.Short(i<Names.Length?Names[i]:"用量",16)+"  "+(raw[i][hover].HasValue?raw[i][hover].Value.ToString("0.##")+" cr":"缺少数据"));
-            var tooltip=ToolTip as ToolTip ?? new ToolTip { MaxWidth=240, PlacementTarget=this };
-            tooltip.Content=new TextBlock { Text=String.Join("\n",lines),TextWrapping=TextWrapping.Wrap,MaxWidth=220,FontSize=11 };
+            var tooltip=ToolTip as ToolTip ?? new ToolTip { MaxWidth=285, PlacementTarget=this, Placement=System.Windows.Controls.Primitives.PlacementMode.MousePoint, HorizontalOffset=12, VerticalOffset=12, StaysOpen=true };
+            tooltip.Background=new SolidColorBrush(Dark?Color.FromRgb(35,39,48):Color.FromRgb(249,249,252));tooltip.Foreground=new SolidColorBrush(Dark?Color.FromRgb(228,231,239):Color.FromRgb(45,50,65));
+            tooltip.Content=new TextBlock { Text=DescribeBucket(hover),TextWrapping=TextWrapping.Wrap,MaxWidth=265,FontSize=11,Foreground=tooltip.Foreground };
             ToolTip=tooltip;
-            if(IsKeyboardFocused)tooltip.IsOpen=true;
+            // Open immediately on chart motion; relying on ToolTipService loses dynamically created tips.
+            tooltip.IsOpen=true;
+        }
+        public string DescribeBucket(int index){
+            if(raw.Count==0 || raw[0].Length==0 || index<0 || index>=raw[0].Length)return "暂无记录";
+            int count=raw[0].Length;long ticks=(End-Start).Ticks/count;
+            var begin=Start.AddTicks(ticks*index);var end=begin.AddTicks(ticks);
+            if(ObservedAt>Start && ObservedAt<end)end=ObservedAt;
+            double minutes=(end-begin).TotalMinutes;if(minutes<=0)return "该区间尚未开始";
+            string format=ticks%TimeSpan.TicksPerMinute==0 && end.Second==0 && begin.Second==0?"HH:mm":"HH:mm:ss";
+            var lines=new List<string>{begin.ToString("MM/dd "+format)+"–"+end.ToString(end.Date==begin.Date?format:"MM/dd "+format)};
+            for(int i=0;i<Math.Min(5,raw.Count);i++)if(index<raw[i].Length){string name=raw.Count>1?UiText.Short(i<Names.Length?Names[i]:"用量",16)+"  ":"";
+                if(minutes<=0 || !raw[i][index].HasValue)lines.Add(name+"暂无记录");
+                else{double credits=raw[i][index].Value;lines.Add(name+(credits/minutes).ToString("0.##")+" cr/min");lines.Add("区间消耗 "+credits.ToString("0.##")+" cr");}
+            }
+            return String.Join("\n",lines);
         }
         protected override void OnRender(DrawingContext dc){
             base.OnRender(dc); var plot=Plot; double scale=CurrentMax(); var data=Current();

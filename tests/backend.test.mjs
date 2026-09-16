@@ -30,6 +30,11 @@ test('backend survives an empty profile, reports missing data, validates and per
     child.stdin.write(JSON.stringify({ type: 'settings', opacity: -10, range: 'invalid', density: 999 }) + '\n');
     const validated = await until(m => m.settings?.opacity === 40);
     assert.equal(validated.settings.range, '7d'); assert.equal(validated.settings.density, 2);
+    child.stdin.write(JSON.stringify({ type: 'settings', selectedTasks: ['a', 'b', 'a'], selectedProjects: [] }) + '\n');
+    const selected = await until(m => m.settings?.selectedTasks?.length === 2);
+    assert.deepEqual(selected.settings.selectedTasks, ['a','b']); assert.deepEqual(selected.settings.selectedProjects, []);
+    child.stdin.write(JSON.stringify({ type: 'settings', selectedTasks: null, scope: 'tasks' }) + '\n');
+    await until(m => m.settings?.scope === 'tasks' && !('selectedTasks' in m.settings));
     child.stdin.write('{invalid\n'); child.stdin.write(JSON.stringify({ type: 'shutdown' }) + '\n');
     await exit;
   } finally {

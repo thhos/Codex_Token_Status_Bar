@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { AppServer } from './rpc.mjs';
 import { UsageIndex } from './usage.mjs';
 import { CodexMetadata } from './cdp.mjs';
+import { comparisonGroups, forecastPresentation, resetCreditCount } from './comparison.mjs';
 import { selectQuota, forecastQuota, bucketCredits, chartWindow, DAY, HOUR } from './core.mjs';
 
 const args = process.argv.slice(2);
@@ -74,17 +75,21 @@ function buildView() {
   const all = index.events.filter(e => e.time >= start && e.time <= now);
   const rootCache = new Map();
   const root = id => { if (!rootCache.has(id)) rootCache.set(id, rootTask(id)); return rootCache.get(id); };
-  let selected = all, subtitle = '本机已记录 · 估算 credits', groups = [];
+  let selected = all, subtitle = '', groups = [], comparisonChoices = [];
   if (settings.scope === 'current') {
     selected = task ? all.filter(e => root(e.thread) === root(task.id)) : [];
     subtitle = (task?.followed ? '正在查看 · ' : '最近活跃 · ') + (task?.title || '暂无任务');
     groups = [{ id: task?.id || 'current', name: task?.title || '当前任务', events: selected }];
   } else if (settings.scope === 'projects' || settings.scope === 'tasks') {
     const map = new Map();
-    for (const e of all) { const key = settings.scope === 'projects' ? e.project || '未知项目' : root(e.thread); if (!map.has(key)) map.set(key, []); map.get(key).push(e); }
-    groups = [...map].map(([key, events]) => ({ id: key, name: settings.scope === 'projects' ? path.basename(key) || key : index.threads.get(key)?.title || '任务 ' + key.slice(0, 8), events }));
-    groups.sort((a, b) => sum(b.events) - sum(a.events)); groups = groups.slice(0, 3);
-    selected = groups.flatMap(g => g.events); subtitle = '本机已记录 · 消耗最多的 3 个' + (settings.scope === 'projects' ? '项目' : '任务');
+    for (const e of index.events) { const key = settings.scope === 'projects' ? e.project || '未知项目' : root(e.thread); if (!map.has(key)) map.set(key, []); map.get(key).push(e); }
+    const selectionKey = settings.scope === 'projects' ? 'selectedProjects' : 'selectedTasks';
+    // Retain saved choices even after their local records age out of the visible range.
+    for (const id of settings[selectionKey] || []) if (!map.has(id)) map.set(id, []);
+    const catalog = [...map].map(([key, history]) => { const events = history.filter(e => e.time >= start && e.time <= now);
+      return { id: key, name: settings.scope === 'projects' ? path.basename(key) || key : index.threads.get(key)?.title || '任务 ' + key.slice(0, 8), events, total: sum(events), latest: history.at(-1)?.time || 0 }; });
+    const comparison = comparisonGroups(catalog, settings[selectionKey]); groups = comparison.groups; comparisonChoices = comparison.choices;
+    selected = groups.flatMap(g => g.events);
   } else groups = [{ id: 'account', name: '本机汇总', events: selected }];
   const unknown = selected.filter(e => e.credits == null).length;
   const predictionKey = Math.floor(now / 60_000) + ':' + lastQuota + ':' + Math.floor((index.events.at(-1)?.time || 0) / 60_000);
@@ -104,7 +109,11 @@ function buildView() {
   const recentHour = recentDay.filter(e => e.time >= now - HOUR);
   const resetLabel = quota ? new Date(quota.resetsAt * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '等待数据';
   return { type: 'view', settings, remaining: quota?.remaining ?? null, quotaLabel: (quota?.windowDurationMins === 10080 ? 'CODEX · 周剩余' : 'CODEX · 剩余额度') + (lastQuota && now - lastQuota > 5 * 60_000 ? ' · 待更新' : ''),
-    forecast: prediction.label, forecastDetail: prediction.detail, warning: prediction.warning, subtitle,
+    forecast: prediction.label, forecastDisplay: forecastPresentation(prediction), forecastDetail: prediction.detail, warning: prediction.warning, subtitle,
+    comparisonChoices, observedAt: now,
+    resetDate: quota ? new Date(quota.resetsAt * 1000).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : '—',
+    resetTime: quota ? new Date(quota.resetsAt * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
+    resetCreditCount: resetCreditCount(rates),
     taskTitle: task?.title || '暂无任务', projectTitle: task?.project ? path.basename(task.project) : '',
     samplingStatus: error ? '更新暂停' : !initialized ? '整理记录中' : '已更新',
     followLabel: task?.followed ? '正在查看' : '最近活跃',
@@ -145,6 +154,10 @@ function updateSettings(message) {
   if (['light', 'dark'].includes(message.theme)) settings.theme = message.theme;
   if (['mint', 'blue', 'violet', 'amber', 'rose'].includes(message.accent)) settings.accent = message.accent;
   if (['smooth', 'raw'].includes(message.smoothing)) settings.smoothing = message.smoothing;
+  for (const key of ['selectedTasks', 'selectedProjects']) {
+    if (message[key] === null) delete settings[key];
+    else if (Array.isArray(message[key])) settings[key] = [...new Set(message[key].filter(id => typeof id === 'string' && id.length > 0 && id.length <= 4096))].slice(0, 5);
+  }
   save('settings.json', settings); emit();
 }
 function shutdown() { if (!running) return; running = false; rpc?.close(); cdp.close(); for (const timer of timers) clearInterval(timer); setTimeout(() => process.exit(0), 1200).unref(); }

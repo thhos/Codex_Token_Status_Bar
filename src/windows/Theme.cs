@@ -11,7 +11,7 @@ namespace CodexPetCredits {
         public static Color Accent(string key, bool dark) { int index = Math.Max(0,Array.IndexOf(Keys,key)); return (Color)ColorConverter.ConvertFromString((dark ? DarkColors : LightColors)[index]); }
         public static Color Series(string key, bool dark, int index) {
             if(index==0)return Accent(key,dark);
-            var alternatives = new[] { "blue", "amber", "violet", "mint" }.Where(k=>k!=key).ToArray();
+            var alternatives = Keys.Where(k=>k!=key).ToArray();
             return Accent(alternatives[(index-1)%alternatives.Length],dark);
         }
     }
