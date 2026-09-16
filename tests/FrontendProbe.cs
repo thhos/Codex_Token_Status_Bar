@@ -31,6 +31,10 @@ public static class FrontendProbe {
         var field = typeof(CompanionWindow).GetField("follower",BindingFlags.Instance|BindingFlags.NonPublic);
         var follower=field.GetValue(window);var observe=follower.GetType().GetMethod("Observe");var tick=follower.GetType().GetMethod("Tick");
         var handle=new WindowInteropHelper(window).Handle;
+        var panel=(Border)typeof(CompanionWindow).GetField("panel",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+        var animated=(AnimatedLayout)((ScrollViewer)panel.Child).Content;animated.AnimateChanges=true;
+        bool watchCollapse=false;int visibleCollapseResizes=0;
+        window.SizeChanged+=delegate{if(watchCollapse && panel.Opacity>.01)visibleCollapseResizes++;};
         var samples=new List<double>();var costs=new List<double>();var clock=Stopwatch.StartNew();double last=0;
         var timer=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(150)};
         int count=0;bool checkedPopup=false,popupPass=false,rangePass=false;
@@ -61,7 +65,9 @@ public static class FrontendProbe {
             if(count==24){var range=(ComboBox)typeof(CompanionWindow).GetField("range",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);var item=range.ItemContainerGenerator.ContainerFromIndex(3) as ComboBoxItem;var popup=(Popup)range.Template.FindName("PART_Popup",range);
                 if(item!=null && popup!=null){var p=item.PointToScreen(new Point(item.ActualWidth/2,item.ActualHeight/2));var popupHandle=((HwndSource)PresentationSource.FromVisual(popup.Child)).Handle;rangePass=GetAncestor(WindowFromPoint(new NativePoint{X=(int)p.X,Y=(int)p.Y}),2)==popupHandle;item.IsSelected=true;rangePass=rangePass && range.SelectedItem.ToString()=="7d";}range.IsDropDownOpen=false;
             }
-            if(count>=90){timer.Stop();CompositionTarget.Rendering-=frame;samples.Sort();costs.Sort();Console.WriteLine("frame interval median="+samples[samples.Count/2].ToString("0.0")+"ms p95="+samples[(int)(samples.Count*.95)].ToString("0.0")+"ms; follow cost p95="+costs[(int)(costs.Count*.95)].ToString("0.00")+"ms");Console.WriteLine((checkedPopup&&popupPass&&rangePass?"PASS":"FAIL")+" both dropdowns stay above panel and options select; moving-anchor replay completed");window.Close();app.Shutdown(checkedPopup&&popupPass&&rangePass?0:1);}
+            if(count==40){((Dictionary<string,object>)fixture["settings"])["density"]=2;window.UpdateView(fixture);}
+            if(count==64){watchCollapse=true;((Dictionary<string,object>)fixture["settings"])["density"]=0;window.UpdateView(fixture);}
+            if(count>=105){timer.Stop();CompositionTarget.Rendering-=frame;samples.Sort();costs.Sort();Console.WriteLine("frame interval median="+samples[samples.Count/2].ToString("0.0")+"ms p95="+samples[(int)(samples.Count*.95)].ToString("0.0")+"ms; follow cost p95="+costs[(int)(costs.Count*.95)].ToString("0.00")+"ms");bool collapsePass=window.ActualHeight<180 && panel.Opacity>.99 && (!SystemParameters.ClientAreaAnimation || visibleCollapseResizes==0);Console.WriteLine("collapse visible resizes="+visibleCollapseResizes+"; surface opacity="+panel.Opacity.ToString("0.00"));bool passed=checkedPopup&&popupPass&&rangePass&&collapsePass;Console.WriteLine((passed?"PASS":"FAIL")+" menus, moving-anchor replay and hidden-background collapse completed");window.Close();app.Shutdown(passed?0:1);}
         };
         CompositionTarget.Rendering+=frame;timer.Tick+=delegate{if(!window.IsVisible)frame(null,EventArgs.Empty);};
         timer.Start();return app.Run();

@@ -73,7 +73,7 @@ namespace CodexPetCredits {
             Topmost = true; ShowInTaskbar = false; ShowActivated = false; FontFamily = new FontFamily("Microsoft YaHei UI"); FontSize = 11;
             UseLayoutRounding = true; SnapsToDevicePixels = true;
             Content = panel;
-            panel.Child = new ScrollViewer { Content = new AnimatedLayout{Child=layout,AnimateChanges=!testing}, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            panel.Child = new ScrollViewer { Content = new AnimatedLayout{Child=layout,AnimateChanges=!testing,ResizeSurface=panel}, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             BuildLayout(); ApplySettings();
             SetHeaderVisible(testing);
             MouseEnter+=delegate{headerTimer.Stop();SetHeaderVisible(true);};
@@ -93,10 +93,9 @@ namespace CodexPetCredits {
             };
         }
         private void SetHeaderVisible(bool visible){
-            // Keep the header's space stable so revealing controls cannot move the panel away from the pointer.
-            header.IsHitTestVisible=visible;double target=visible?1:0;double from=header.Opacity;
-            header.BeginAnimation(UIElement.OpacityProperty,null);header.Opacity=target;
-            if(!testMode && IsLoaded && SystemParameters.ClientAreaAnimation)header.BeginAnimation(UIElement.OpacityProperty,new DoubleAnimation(from,target,TimeSpan.FromMilliseconds(150)){FillBehavior=FillBehavior.Stop});
+            // Collapsing the whole row removes both the controls and their bottom margin.
+            header.IsHitTestVisible=visible;header.Opacity=visible?1:0;
+            header.Visibility=visible?Visibility.Visible:Visibility.Collapsed;
         }
         private TextBlock Text(string text, double size, bool value = false) {
             var label = new TextBlock { Text = text, FontSize = size, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -358,14 +357,14 @@ namespace CodexPetCredits {
         private void Send(object message) { if(testMode || backend==null)return;try{backend.StandardInput.WriteLine(Json.Serializer.Serialize(message));backend.StandardInput.Flush();}catch{} }
         public void RenderTo(string filename, bool showPreferences = false, bool showDetails = false, int selectedBucket = -1, bool showHeader = true) {
             var previousVisibility=preferences.Visibility;bool previousModels=modelsDisclosure.IsExpanded,previousAccounts=accountsDisclosure.IsExpanded;
-            double previousHeaderOpacity=header.Opacity;header.Opacity=showHeader?1:0;chart.SelectBucket(selectedBucket);
+            double previousHeaderOpacity=header.Opacity;var previousHeaderVisibility=header.Visibility;header.Opacity=showHeader?1:0;header.Visibility=showHeader?Visibility.Visible:Visibility.Collapsed;chart.SelectBucket(selectedBucket);
             if(showPreferences)preferences.Visibility=Visibility.Visible;if(showDetails){modelsDisclosure.IsExpanded=true;accountsDisclosure.IsExpanded=true;}
             InvalidateMeasure();UpdateLayout();Dispatcher.Invoke(DispatcherPriority.Render,new Action(delegate{}));
             chart.FinishAnimation();Measure(new Size(Width,1000));Arrange(new Rect(0,0,Width,DesiredSize.Height));UpdateLayout();
             var target=new RenderTargetBitmap((int)Math.Ceiling(ActualWidth),(int)Math.Ceiling(ActualHeight),96,96,PixelFormats.Pbgra32);target.Render(this);
             var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(target));using(var stream=File.Create(filename))png.Save(stream);
             preferences.Visibility=previousVisibility;modelsDisclosure.IsExpanded=previousModels;accountsDisclosure.IsExpanded=previousAccounts;
-            header.Opacity=previousHeaderOpacity;chart.SelectBucket(-1);
+            header.Opacity=previousHeaderOpacity;header.Visibility=previousHeaderVisibility;chart.SelectBucket(-1);
         }
     }
 

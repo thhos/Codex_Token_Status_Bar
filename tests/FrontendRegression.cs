@@ -152,14 +152,25 @@ public static class FrontendRegression {
                 host.AnimateChanges=false;body.Height=240;window.UpdateLayout();Require(Math.Abs(host.ActualHeight-240)<1,"disabled motion still animates");
             }finally{window.Close();}
         });
-        Check("compact chrome hides without layout movement and dropdowns blend with the panel", delegate {
+        Check("hidden chrome releases its height and dropdowns blend with the panel", delegate {
             var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=2;settings["opacity"]=65;
             var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
             try{
                 double height=window.ActualHeight;var header=(DockPanel)field("header");var toggle=typeof(CompanionWindow).GetMethod("SetHeaderVisible",BindingFlags.Instance|BindingFlags.NonPublic);
-                toggle.Invoke(window,new object[]{false});window.UpdateLayout();Require(header.Opacity==0 && !header.IsHitTestVisible && Math.Abs(window.ActualHeight-height)<1,"hidden header moves the window or captures input");toggle.Invoke(window,new object[]{true});Require(header.Opacity==1 && header.IsHitTestVisible,"header did not restore");
+                toggle.Invoke(window,new object[]{false});window.UpdateLayout();Require(header.Visibility==Visibility.Collapsed && !header.IsHitTestVisible && window.ActualHeight<height-30,"hidden header still occupies height");toggle.Invoke(window,new object[]{true});window.UpdateLayout();Require(header.Opacity==1 && header.IsHitTestVisible && Math.Abs(window.ActualHeight-height)<1,"header did not restore");
                 var visibleTexts=Descendants(window).OfType<TextBlock>().Select(t=>t.Text).ToArray();Require(!visibleTexts.Any(t=>t.Contains("额度已更新") || t.Contains("虚线：")),"removed captions remain visible");Require(visibleTexts.Contains("模型使用量"),"model section was not renamed");
                 foreach(string name in new[]{"scope","range"}){var combo=(ComboBox)field(name);Require(((SolidColorBrush)combo.Background).Color.A<80,"selector background is still opaque");combo.ApplyTemplate();combo.IsDropDownOpen=true;window.UpdateLayout();var popup=(System.Windows.Controls.Primitives.Popup)combo.Template.FindName("PART_Popup",combo);var background=((SolidColorBrush)((Border)popup.Child).Background).Color;Require(background.A>100 && background.A<200,"popup does not respect opacity setting");combo.IsDropDownOpen=false;}
+            }finally{window.Close();}
+        });
+        Check("shrinking the companion never resizes a visible translucent background", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=2;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Pump(30);var host=Descendants(window).OfType<AnimatedLayout>().Single();host.AnimateChanges=true;
+            var surface=(Border)typeof(CompanionWindow).GetField("panel",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);int visibleResizes=0,resizes=0;
+            window.SizeChanged+=delegate{resizes++;if(surface.Opacity>.01)visibleResizes++;};
+            try{double expanded=window.ActualHeight;settings["density"]=0;window.UpdateView(fixture);window.UpdateLayout();Pump(550);
+                Require(window.ActualHeight<expanded-200 && resizes>0,"collapse did not finish");
+                if(SystemParameters.ClientAreaAnimation)Require(visibleResizes==0,"background was resized while visible: "+visibleResizes+" / "+resizes+" size changes");
+                Require(Math.Abs(surface.Opacity-1)<.001,"background remained faded");
             }finally{window.Close();}
         });
         Check("companion density changes animate through the scroll container", delegate {
@@ -169,6 +180,17 @@ public static class FrontendRegression {
                 var frames=new List<double>();window.SizeChanged+=delegate{frames.Add(window.ActualHeight);};double collapsed=window.ActualHeight;settings["density"]=2;window.UpdateView(fixture);window.UpdateLayout();Pump(370);double expanded=window.ActualHeight;
                 Require(expanded>collapsed+200,"detail content is clipped after expansion");if(SystemParameters.ClientAreaAnimation)Require(frames.Any(height=>height>collapsed+1 && height<expanded-1),"window skipped intermediate sizes: "+String.Join(",",frames));
                 settings["density"]=0;window.UpdateView(fixture);window.UpdateLayout();Pump(330);Require(Math.Abs(window.ActualHeight-collapsed)<1,"companion did not collapse back to initial size");
+            }finally{window.Close();}
+        });
+        Check("rapid density and header changes settle without leaving a faded surface", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=2;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Pump(30);var host=Descendants(window).OfType<AnimatedLayout>().Single();host.AnimateChanges=true;
+            var surface=(Border)typeof(CompanionWindow).GetField("panel",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            try{
+                settings["density"]=0;window.UpdateView(fixture);window.UpdateLayout();Pump(35);settings["density"]=1;window.UpdateView(fixture);window.UpdateLayout();Pump(380);
+                Require(window.ActualHeight>250 && surface.Opacity>.99,"newer expanded content was lost during fade-out");
+                settings["density"]=0;window.UpdateView(fixture);window.UpdateLayout();Pump(115);typeof(CompanionWindow).GetMethod("SetHeaderVisible",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{false});window.UpdateLayout();Pump(400);
+                Require(window.ActualHeight<110 && surface.Opacity>.99 && !surface.HasAnimatedProperties,"header collapse interrupted the surface's recovery");
             }finally{window.Close();}
         });
         Check("summary typography aligns and task/project checkboxes apply a draft", delegate {
