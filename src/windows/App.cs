@@ -61,7 +61,6 @@ namespace CodexPetCredits {
         private TextBlock amount, quotaLabel, forecast, forecastLabel, subTitle, total, totalLabel, intervalLabel, recentHour, recentDay, reset, status, coverage;
         private Button smoothButton, themeButton;
         private Button selectionButton, titleButton;
-        private TextBlock resetDate, resetTime;
         private Expander modelsDisclosure, accountsDisclosure;
         private Brush primary, muted, accentBrush;
 
@@ -105,13 +104,12 @@ namespace CodexPetCredits {
             for(int i=0;i<3;i++){int mode=i;var button=ActionButton(icons[i],new[]{"极简","趋势","详细"}[i],delegate{ChangeSetting("density",density==mode?0:mode);});button.Content=new System.Windows.Shapes.Path{Data=Geometry.Parse(paths[i]),Stroke=Brushes.Gray,StrokeThickness=1.3,Width=12,Height=12,Stretch=Stretch.Uniform};modeButtons.Add(button);modes.Children.Add(button);}
             modes.Children.Add(ActionButton("⋯","外观设置",delegate{preferences.Visibility=preferences.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;}));
             header.Children.Add(Text("CODEX  /  用量",10));layout.Children.Add(header);
-            var summary = new Grid();foreach(double weight in new[]{.8,1.4,1.4})summary.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(weight,GridUnitType.Star)});
+            // Reserve more room for the forecast caption while keeping the companion compact.
+            var summary = new Grid();foreach(double weight in new[]{1.0,1.8})summary.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(weight,GridUnitType.Star)});
             var quota = new StackPanel();amount=Text("—",24,true);amount.Height=36;quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);
             summary.Children.Add(Card(quota,new Thickness(0,0,4,0)));
             var prediction = new StackPanel();forecast=Text("学习中",24,true);forecast.Height=36;forecastLabel=Text("耗尽预测",10);prediction.Children.Add(forecast);prediction.Children.Add(forecastLabel);
-            var predictionCard=Card(prediction,new Thickness(2,0,2,0));Grid.SetColumn(predictionCard,1);summary.Children.Add(predictionCard);
-            var resetStack=new StackPanel();resetDate=Text("—",24,true);resetDate.Height=36;resetTime=Text("重置时间 · 券数读取中",10);resetStack.Children.Add(resetDate);resetStack.Children.Add(resetTime);
-            var resetCard=Card(resetStack,new Thickness(4,0,0,0));Grid.SetColumn(resetCard,2);summary.Children.Add(resetCard);layout.Children.Add(summary);
+            var predictionCard=Card(prediction,new Thickness(4,0,0,0));Grid.SetColumn(predictionCard,1);summary.Children.Add(predictionCard);layout.Children.Add(summary);
             layout.Children.Add(trend);trend.Margin=new Thickness(0,10,0,0);
             var filters = new StackPanel { VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(10,0,0,0) };
             ConfigureCombo(range,new[]{"1h","6h","24h","7d","30d"},104,"时间窗口");
@@ -201,7 +199,7 @@ namespace CodexPetCredits {
         }
         private void ApplySettings() {
             updating=true;density=(int)Json.Number(settings,"density");dark=Json.Text(settings,"theme","dark")!="light";accent=Json.Text(settings,"accent","mint");
-            Width=432;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
+            Width=368;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
             scope.SelectedIndex=Math.Max(0,Array.IndexOf(new[]{"current","account","tasks","projects"},Json.Text(settings,"scope","current")));range.SelectedItem=Json.Text(settings,"range","24h");
             opacity.Value=Json.Number(settings,"opacity",90);themeButton.Content=dark?"深色":"浅色";smoothButton.Content=Json.Text(settings,"smoothing","smooth")=="smooth"?"平滑":"原值";
             ApplyTheme();updating=false;
@@ -242,12 +240,14 @@ namespace CodexPetCredits {
             UpdateText(amount,Json.Get(state,"remaining")==null?"—":Json.Number(state,"remaining").ToString("0")+"%");
             quotaLabel.Text=Json.Text(state,"quotaLabel").Contains("周")?"周额度剩余":"额度剩余";
             UpdateText(forecast,Json.Text(Json.Get(state,"forecastDisplay"),"value","学习中"));
-            string predictionLabel=Json.Text(Json.Get(state,"forecastDisplay"),"label","耗尽预测");UpdateText(forecastLabel,predictionLabel);
+            string predictionLabel=Json.Text(Json.Get(state,"forecastDisplay"),"label","耗尽预测");
+            bool earlyDepletion=predictionLabel=="！预计提前耗尽";
+            // Coupons are relevant when the forecast warns of running out before reset.
+            string couponLabel=Json.Get(state,"resetCreditCount")==null?"券数未知":Json.Number(state,"resetCreditCount")==0?"无重置券":Json.Number(state,"resetCreditCount").ToString("0")+" 张重置券";
+            UpdateText(forecastLabel,predictionLabel+(earlyDepletion?" · "+couponLabel:""));
             // The caution color is semantic and independent of the selected accent color.
-            forecastLabel.Foreground=predictionLabel=="！预计提前耗尽"?new SolidColorBrush(dark?Color.FromRgb(246,205,97):Color.FromRgb(139,100,0)):muted;
+            forecastLabel.Foreground=earlyDepletion?new SolidColorBrush(dark?Color.FromRgb(246,205,97):Color.FromRgb(139,100,0)):muted;
             forecastLabel.ToolTip=Json.Flag(state,"warning")?"预计在重置前耗尽":"结合工作习惯估计";
-            UpdateText(resetDate,Json.Text(state,"resetDisplay","—"));
-            UpdateText(resetTime,"重置时间 · "+(Json.Get(state,"resetCreditCount")==null?"券数未知":Json.Number(state,"resetCreditCount")==0?"无重置券":Json.Number(state,"resetCreditCount").ToString("0")+" 张重置券"));
             forecast.ToolTip="结合工作习惯与近期速度";
             string title=Json.Text(settings,"scope","current")=="current"?Json.Text(state,"taskTitle","暂无任务"):Json.Text(state,"subtitle","本机已记录");
             subTitle.Tag=title;subTitle.Text=UiText.Short(title,30);

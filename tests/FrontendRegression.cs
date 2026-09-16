@@ -118,8 +118,8 @@ public static class FrontendRegression {
             var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=1;
             var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();
             Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
-            try{var amount=(TextBlock)field("amount");var forecast=(TextBlock)field("forecast");var reset=(TextBlock)field("resetDate");
-                Require(amount.FontSize==forecast.FontSize && amount.FontSize==reset.FontSize,"summary fonts differ");
+            try{var amount=(TextBlock)field("amount");var forecast=(TextBlock)field("forecast");
+                Require(amount.FontSize==forecast.FontSize,"summary fonts differ");
                 Require(Math.Abs(amount.TranslatePoint(new Point(),window).Y-forecast.TranslatePoint(new Point(),window).Y)<1,"summary baselines differ");
                 typeof(CompanionWindow).GetMethod("ShowSelection",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,null);
                 var popup=(System.Windows.Controls.Primitives.Popup)field("selectionPopup");popup.Child.UpdateLayout();var boxes=Descendants(popup.Child).OfType<CheckBox>().ToArray();Require(boxes.Length==3,"comparison options missing");
@@ -134,13 +134,16 @@ public static class FrontendRegression {
             Func<string,TextBlock> text=name=>(TextBlock)typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
             try{
                 Require(text("forecast").Text=="9/19 晚上","date must be on the main forecast line");
-                Require(text("forecastLabel").Text=="！预计提前耗尽","forecast explanation is ambiguous");
+                Require(text("forecastLabel").Text=="！预计提前耗尽 · 3 张重置券","coupon count must join the warning caption");
                 var warning=((SolidColorBrush)text("forecastLabel").Foreground).Color;Require(warning.R>220 && warning.G>150 && warning.B<130,"warning is not yellow");
-                Require(text("resetDate").Text=="9/21 中午" && text("resetTime").Text=="重置时间 · 3 张重置券","reset is not a complete two-line summary");
+                Require(window.Width==368,"companion is too wide");
+                Require(((Grid)VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(text("forecast").Parent))).Children.Count==2,"summary must contain only two cards");
                 fixture["forecastDisplay"]=new Dictionary<string,object>{{"value","12/31 晚上"},{"label","！预计提前耗尽"}};fixture["resetDisplay"]="12/31 中午";window.UpdateView(fixture);window.UpdateLayout();
-                foreach(string name in new[]{"forecast","resetDate","resetTime"}){var label=text(name);var measure=new FormattedText(label.Text,System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),FlowDirection.LeftToRight,new Typeface(label.FontFamily,label.FontStyle,label.FontWeight,label.FontStretch),label.FontSize,label.Foreground,1);Require(measure.Width<=label.ActualWidth+1,"summary text clips: "+name);}
+                foreach(string name in new[]{"forecast","forecastLabel"}){var label=text(name);var measure=new FormattedText(label.Text,System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),FlowDirection.LeftToRight,new Typeface(label.FontFamily,label.FontStyle,label.FontWeight,label.FontStretch),label.FontSize,label.Foreground,1);Require(measure.Width<=label.ActualWidth+1,"summary text clips: "+name);}
+                fixture["resetCreditCount"]=0;window.UpdateView(fixture);Require(text("forecastLabel").Text=="！预计提前耗尽 · 无重置券","zero coupons are unclear");
+                fixture["resetCreditCount"]=null;window.UpdateView(fixture);Require(text("forecastLabel").Text=="！预计提前耗尽 · 券数未知","missing coupons are treated as zero");
                 fixture["resetCreditCount"]=0;fixture["warning"]=false;fixture["forecastDisplay"]=new Dictionary<string,object>{{"value","至重置"},{"label","预计不会耗尽"}};window.UpdateView(fixture);
-                Require(text("resetTime").Text=="重置时间 · 无重置券","zero coupons are unclear");Require(((SolidColorBrush)text("forecastLabel").Foreground).Color!=warning,"warning color persisted after recovery");
+                Require(text("forecastLabel").Text=="预计不会耗尽","safe forecast still displays warning coupons");Require(((SolidColorBrush)text("forecastLabel").Foreground).Color!=warning,"warning color persisted after recovery");
             }finally{window.Close();}
         });
         Check("value updates fade out then in and discard superseded samples", delegate {
