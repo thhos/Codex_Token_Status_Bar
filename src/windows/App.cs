@@ -50,6 +50,8 @@ namespace CodexPetCredits {
         private readonly Border panel = new Border { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Padding = new Thickness(13) };
         private readonly StackPanel layout = new StackPanel(), trend = new StackPanel(), detail = new StackPanel(), preferences = new StackPanel();
         private readonly DockPanel header = new DockPanel { Margin = new Thickness(0,0,0,9) };
+        private readonly AnimatedLayout headerReveal = new AnimatedLayout();
+        private readonly AnimatedLayout contentReveal = new AnimatedLayout();
         private readonly DispatcherTimer headerTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         private readonly StackPanel legendRows = new StackPanel(), modelRows = new StackPanel(), accountRows = new StackPanel();
         private readonly List<TextBlock> labels = new List<TextBlock>(), values = new List<TextBlock>();
@@ -68,12 +70,15 @@ namespace CodexPetCredits {
 
         public CompanionWindow(string projectRoot, bool testing) {
             root = projectRoot; testMode = testing;
-            Title = "Codex Pet Credits"; Width = 320; SizeToContent = SizeToContent.Height;
+            Title = "Codex Pet Credits"; Width = 320; Height=900; SizeToContent = SizeToContent.Manual;
             WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true; Background = Brushes.Transparent;
             Topmost = true; ShowInTaskbar = false; ShowActivated = false; FontFamily = new FontFamily("Microsoft YaHei UI"); FontSize = 11;
             UseLayoutRounding = true; SnapsToDevicePixels = true;
-            Content = panel;
-            panel.Child = new ScrollViewer { Content = new AnimatedLayout{Child=layout,AnimateChanges=!testing,ResizeSurface=panel}, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            // Keep the native layered window stable; only its painted panel changes height.
+            var viewport=new Grid();viewport.Children.Add(panel);Content=viewport;panel.VerticalAlignment=VerticalAlignment.Bottom;
+            headerReveal.Child=header;headerReveal.AnimateChanges=!testing;
+            contentReveal.Child=layout;contentReveal.AnimateChanges=!testing;contentReveal.SuppressAnimation=()=>headerReveal.IsAnimating;
+            panel.Child = new ScrollViewer { Content = contentReveal, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             BuildLayout(); ApplySettings();
             SetHeaderVisible(testing);
             MouseEnter+=delegate{headerTimer.Stop();SetHeaderVisible(true);};
@@ -93,9 +98,15 @@ namespace CodexPetCredits {
             };
         }
         private void SetHeaderVisible(bool visible){
-            // Collapsing the whole row removes both the controls and their bottom margin.
+            // Reveal the row progressively so content movement exactly matches panel growth.
             header.IsHitTestVisible=visible;header.Opacity=visible?1:0;
-            header.Visibility=visible?Visibility.Visible:Visibility.Collapsed;
+            headerReveal.Expanded=visible;
+        }
+        public double SurfaceHeight { get { return panel.ActualHeight; } }
+        public double SurfaceOffset { get { return panel.TranslatePoint(new Point(),this).Y; } }
+        public void SetAttachmentSide(int side){
+            var alignment=side==0?VerticalAlignment.Bottom:side==1?VerticalAlignment.Top:VerticalAlignment.Center;
+            if(panel.VerticalAlignment!=alignment){panel.VerticalAlignment=alignment;UpdateLayout();}
         }
         private TextBlock Text(string text, double size, bool value = false) {
             var label = new TextBlock { Text = text, FontSize = size, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -117,7 +128,7 @@ namespace CodexPetCredits {
             string[] paths={"M 1,6 L 12,6","M 1,10 L 4,5 L 7,8 L 12,2","M 2,2 L 12,2 M 2,6 L 12,6 M 2,10 L 9,10"};
             for(int i=0;i<3;i++){int mode=i;var button=ActionButton(icons[i],new[]{"极简","趋势","详细"}[i],delegate{ChangeSetting("density",density==mode?0:mode);});button.Content=new System.Windows.Shapes.Path{Data=Geometry.Parse(paths[i]),Stroke=Brushes.Gray,StrokeThickness=1.3,Width=12,Height=12,Stretch=Stretch.Uniform};modeButtons.Add(button);modes.Children.Add(button);}
             modes.Children.Add(ActionButton("⋯","外观设置",delegate{preferences.Visibility=preferences.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;}));
-            header.Children.Add(Text("CODEX  /  用量",10));layout.Children.Add(header);
+            header.Children.Add(Text("CODEX  /  用量",10));layout.Children.Add(headerReveal);
             // Reserve more room for the forecast caption while keeping the companion compact.
             var summary = new Grid();foreach(double weight in new[]{1.0,1.8})summary.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(weight,GridUnitType.Star)});
             var quota = new StackPanel();amount=Text("—",24,true);amount.Height=36;quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);
@@ -357,14 +368,15 @@ namespace CodexPetCredits {
         private void Send(object message) { if(testMode || backend==null)return;try{backend.StandardInput.WriteLine(Json.Serializer.Serialize(message));backend.StandardInput.Flush();}catch{} }
         public void RenderTo(string filename, bool showPreferences = false, bool showDetails = false, int selectedBucket = -1, bool showHeader = true) {
             var previousVisibility=preferences.Visibility;bool previousModels=modelsDisclosure.IsExpanded,previousAccounts=accountsDisclosure.IsExpanded;
-            double previousHeaderOpacity=header.Opacity;var previousHeaderVisibility=header.Visibility;header.Opacity=showHeader?1:0;header.Visibility=showHeader?Visibility.Visible:Visibility.Collapsed;chart.SelectBucket(selectedBucket);
+            double previousHeaderOpacity=header.Opacity;bool previousHeaderExpanded=headerReveal.Expanded;header.Opacity=showHeader?1:0;headerReveal.Expanded=showHeader;chart.SelectBucket(selectedBucket);
             if(showPreferences)preferences.Visibility=Visibility.Visible;if(showDetails){modelsDisclosure.IsExpanded=true;accountsDisclosure.IsExpanded=true;}
             InvalidateMeasure();UpdateLayout();Dispatcher.Invoke(DispatcherPriority.Render,new Action(delegate{}));
-            chart.FinishAnimation();Measure(new Size(Width,1000));Arrange(new Rect(0,0,Width,DesiredSize.Height));UpdateLayout();
-            var target=new RenderTargetBitmap((int)Math.Ceiling(ActualWidth),(int)Math.Ceiling(ActualHeight),96,96,PixelFormats.Pbgra32);target.Render(this);
+            chart.FinishAnimation();UpdateLayout();
+            var target=new RenderTargetBitmap((int)Math.Ceiling(panel.ActualWidth),(int)Math.Ceiling(panel.ActualHeight),96,96,PixelFormats.Pbgra32);
+            var visual=new DrawingVisual();using(var dc=visual.RenderOpen())dc.DrawRectangle(new VisualBrush(panel),null,new Rect(0,0,panel.ActualWidth,panel.ActualHeight));target.Render(visual);
             var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(target));using(var stream=File.Create(filename))png.Save(stream);
             preferences.Visibility=previousVisibility;modelsDisclosure.IsExpanded=previousModels;accountsDisclosure.IsExpanded=previousAccounts;
-            header.Opacity=previousHeaderOpacity;header.Visibility=previousHeaderVisibility;chart.SelectBucket(-1);
+            header.Opacity=previousHeaderOpacity;headerReveal.Expanded=previousHeaderExpanded;chart.SelectBucket(-1);
         }
     }
 
@@ -386,7 +398,7 @@ namespace CodexPetCredits {
                         var settings = Json.Map(fixture["settings"]); settings["density"] = mode; settings["theme"] = theme; window.UpdateView(fixture);
                         window.Dispatcher.Invoke(DispatcherPriority.Render, new Action(delegate { }));
                         window.RenderTo(Path.Combine(output, theme + "-" + mode + ".png"));
-                        if (window.ActualWidth < 300 || window.ActualHeight < 70 || window.ActualHeight > 900) throw new Exception("UI layout bounds failed");
+                        if (window.ActualWidth < 300 || window.SurfaceHeight < 70 || window.SurfaceHeight > 900) throw new Exception("UI layout bounds failed");
                     }
                     foreach(string theme in new[]{"dark","light"})foreach(string accent in Palette.Keys){var settings=Json.Map(fixture["settings"]);settings["density"]=2;settings["theme"]=theme;settings["accent"]=accent;window.UpdateView(fixture);window.RenderTo(Path.Combine(output,theme+"-"+accent+".png"),true,true);}
                     // Exercise bounded gaps in both themes using explicitly synthetic preview data.

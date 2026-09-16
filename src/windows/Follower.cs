@@ -58,8 +58,11 @@ namespace CodexPetCredits {
             var work = new Rect(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
             double dpi = VisualTreeHelper.GetDpi(window).DpiScaleX;
             double maxHeight = Math.Max(140, work.Height / dpi - 24); if (window.MaxHeight != maxHeight) window.MaxHeight = maxHeight;
+            var companion=window as CompanionWindow;
+            if(companion!=null && (Math.Abs(window.Height-maxHeight)>.5 || companion.SurfaceHeight<1)){window.Height=maxHeight;window.UpdateLayout();}
             int previousSide = placement.Side;
-            var destination = placement.Place(pet, new Size(window.Width * dpi, Math.Max(80, window.ActualHeight) * dpi), work, obstacles, Dragging);
+            var destination = placement.Place(pet, new Size(window.Width * dpi, Math.Max(1, companion==null?window.ActualHeight:companion.SurfaceHeight) * dpi), work, obstacles, Dragging);
+            if(companion!=null)companion.SetAttachmentSide(placement.Side);
             if (!first && previousSide != placement.Side && SystemParameters.ClientAreaAnimation) {
                 transition = new AttachmentTransition(new Rect(x, y, destination.Width, destination.Height), destination, work, obstacles);
                 transitionStarted = now; transitionAnchor = pet.TopLeft; transitionTarget = destination.TopLeft;
@@ -78,7 +81,8 @@ namespace CodexPetCredits {
             } else { x = destination.X; y = destination.Y; }
             first = false;
             if (Math.Abs(window.Opacity - opacity) > .001) window.Opacity = opacity;
-            int nextX = (int)Math.Round(x), nextY = (int)Math.Round(y);
+            // Placement uses the painted panel, excluding the fully transparent reserved viewport.
+            int nextX = (int)Math.Round(x), nextY = (int)Math.Round(y-(companion==null?0:companion.SurfaceOffset*dpi));
             // Preserve popup z-order and skip stationary frames. Raising the main HWND hides its dropdowns.
             if (nextX != placedX || nextY != placedY) { Native.SetWindowPos(handle, IntPtr.Zero, nextX, nextY, 0, 0, 0x0010 | 0x0001 | 0x0004); placedX = nextX; placedY = nextY; }
             if (!window.IsVisible) window.Show();

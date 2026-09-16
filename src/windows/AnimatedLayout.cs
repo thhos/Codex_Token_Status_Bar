@@ -2,61 +2,37 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
-using System.Windows.Threading;
 
 namespace CodexPetCredits {
-    // Measure content at its natural height; animate only the space exposed to the window.
+    // Animate visual layout inside a fixed native surface; never fade the whole panel to resize it.
     public sealed class AnimatedLayout : Decorator {
         private static readonly DependencyProperty DisplayedHeightProperty=DependencyProperty.Register("DisplayedHeight",typeof(double),typeof(AnimatedLayout),new FrameworkPropertyMetadata(0.0,FrameworkPropertyMetadataOptions.AffectsMeasure));
-        private double naturalHeight=Double.NaN;
+        private double targetHeight=Double.NaN,contentHeight;
         private int revision;
-        private bool fadingOut;
+        private bool expanded=true;
         public bool AnimateChanges=true;
-        public FrameworkElement ResizeSurface;
+        public Func<bool> SuppressAnimation;
+        public bool IsAnimating { get; private set; }
+        public bool Expanded { get{return expanded;} set{if(expanded!=value){expanded=value;InvalidateMeasure();}} }
         public AnimatedLayout(){ClipToBounds=true;}
         protected override Size MeasureOverride(Size constraint){
             if(Child==null)return new Size();
-            Child.Measure(new Size(constraint.Width,Double.PositiveInfinity));var desired=Child.DesiredSize;
-            if(Double.IsNaN(naturalHeight) || Math.Abs(desired.Height-naturalHeight)>.5){
-                bool animate=!Double.IsNaN(naturalHeight) && IsLoaded && AnimateChanges && SystemParameters.ClientAreaAnimation;
-                double from=(double)GetValue(DisplayedHeightProperty);naturalHeight=desired.Height;
-                // A layered HWND can flash when repeatedly shrunk while visible. Freeze its size,
-                // fade its surface out, then commit the newest height once before revealing it.
-                if(animate && ResizeSurface!=null && (fadingOut || naturalHeight<from || ResizeSurface.Opacity<.999)){
-                    if(!fadingOut)ShrinkAfterFade(from);
-                    return new Size(desired.Width,Math.Max(0,(double)GetValue(DisplayedHeightProperty)));
-                }
-                fadingOut=false;
-                if(ResizeSurface!=null){ResizeSurface.BeginAnimation(UIElement.OpacityProperty,null);ResizeSurface.Opacity=1;}
-                int currentRevision=++revision;BeginAnimation(DisplayedHeightProperty,null);SetValue(DisplayedHeightProperty,naturalHeight);
+            Child.Measure(new Size(constraint.Width,Double.PositiveInfinity));var desired=Child.DesiredSize;contentHeight=desired.Height;
+            double next=expanded?contentHeight:0;
+            if(Double.IsNaN(targetHeight) || Math.Abs(next-targetHeight)>.5){
+                bool animate=!Double.IsNaN(targetHeight) && IsLoaded && AnimateChanges && SystemParameters.ClientAreaAnimation && (SuppressAnimation==null || !SuppressAnimation());
+                double from=(double)GetValue(DisplayedHeightProperty);targetHeight=next;int currentRevision=++revision;
+                BeginAnimation(DisplayedHeightProperty,null);SetValue(DisplayedHeightProperty,targetHeight);IsAnimating=animate;
                 if(animate){
-                    var animation=new DoubleAnimation(from,naturalHeight,TimeSpan.FromMilliseconds(220)){EasingFunction=new CubicEase{EasingMode=EasingMode.EaseOut},FillBehavior=FillBehavior.Stop};
-                    animation.Completed+=delegate{if(revision==currentRevision)BeginAnimation(DisplayedHeightProperty,null);};
+                    var animation=new DoubleAnimation(from,targetHeight,TimeSpan.FromMilliseconds(220)){EasingFunction=new CubicEase{EasingMode=EasingMode.EaseOut},FillBehavior=FillBehavior.Stop};
+                    animation.Completed+=delegate{if(revision==currentRevision){BeginAnimation(DisplayedHeightProperty,null);IsAnimating=false;}};
                     BeginAnimation(DisplayedHeightProperty,animation);
                 }
             }
             return new Size(desired.Width,Math.Max(0,(double)GetValue(DisplayedHeightProperty)));
         }
-        private void ShrinkAfterFade(double from){
-            int currentRevision=++revision;fadingOut=true;
-            BeginAnimation(DisplayedHeightProperty,null);SetValue(DisplayedHeightProperty,from);
-            var fadeOut=new DoubleAnimation(ResizeSurface.Opacity,0,TimeSpan.FromMilliseconds(90)){EasingFunction=new QuadraticEase{EasingMode=EasingMode.EaseIn}};
-            fadeOut.Completed+=delegate{
-                if(currentRevision!=revision)return;
-                fadingOut=false;ResizeSurface.BeginAnimation(UIElement.OpacityProperty,null);ResizeSurface.Opacity=0;
-                SetValue(DisplayedHeightProperty,naturalHeight);InvalidateMeasure();
-                // Wait for layout and follow positioning to settle before painting the smaller surface.
-                Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(delegate{
-                    if(currentRevision!=revision)return;
-                    var fadeIn=new DoubleAnimation(0,1,TimeSpan.FromMilliseconds(130)){EasingFunction=new QuadraticEase{EasingMode=EasingMode.EaseOut}};
-                    fadeIn.Completed+=delegate{if(currentRevision==revision){ResizeSurface.BeginAnimation(UIElement.OpacityProperty,null);ResizeSurface.Opacity=1;}};
-                    ResizeSurface.BeginAnimation(UIElement.OpacityProperty,fadeIn);
-                }));
-            };
-            ResizeSurface.BeginAnimation(UIElement.OpacityProperty,fadeOut);
-        }
         protected override Size ArrangeOverride(Size finalSize){
-            if(Child!=null)Child.Arrange(new Rect(0,0,finalSize.Width,Math.Max(0,naturalHeight)));
+            if(Child!=null)Child.Arrange(new Rect(0,0,finalSize.Width,Math.Max(0,contentHeight)));
             return finalSize;
         }
     }
