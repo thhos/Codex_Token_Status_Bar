@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { AppServer } from './rpc.mjs';
 import { UsageIndex } from './usage.mjs';
 import { CodexMetadata } from './cdp.mjs';
-import { comparisonGroups, forecastPresentation, resetCreditCount } from './comparison.mjs';
+import { comparisonGroups, forecastPresentation, resetCreditCount, datePeriod } from './comparison.mjs';
 import { selectQuota, forecastQuota, bucketCredits, chartWindow, DAY, HOUR } from './core.mjs';
 
 const args = process.argv.slice(2);
@@ -114,6 +114,7 @@ function buildView() {
     resetDate: quota ? new Date(quota.resetsAt * 1000).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : '—',
     resetTime: quota ? new Date(quota.resetsAt * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
     resetCreditCount: resetCreditCount(rates),
+    resetDisplay: datePeriod(quota ? quota.resetsAt * 1000 : null),
     taskTitle: task?.title || '暂无任务', projectTitle: task?.project ? path.basename(task.project) : '',
     samplingStatus: error ? '更新暂停' : !initialized ? '整理记录中' : '已更新',
     followLabel: task?.followed ? '正在查看' : '最近活跃',

@@ -128,8 +128,37 @@ public static class FrontendRegression {
                 var saved=(Dictionary<string,object>)field("settings");var ids=(string[])saved["selectedProjects"];Require(ids.SequenceEqual(new[]{"project-b","project-c"}),"checkbox draft did not apply");Require(!popup.IsOpen,"picker did not close after apply");
             }finally{window.Close();}
         });
+        Check("summary uses complete two-line meanings and a yellow warning", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();
+            Func<string,TextBlock> text=name=>(TextBlock)typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            try{
+                Require(text("forecast").Text=="9/19 晚上","date must be on the main forecast line");
+                Require(text("forecastLabel").Text=="！预计提前耗尽","forecast explanation is ambiguous");
+                var warning=((SolidColorBrush)text("forecastLabel").Foreground).Color;Require(warning.R>220 && warning.G>150 && warning.B<130,"warning is not yellow");
+                Require(text("resetDate").Text=="9/21 中午" && text("resetTime").Text=="重置时间 · 3 张重置券","reset is not a complete two-line summary");
+                fixture["forecastDisplay"]=new Dictionary<string,object>{{"value","12/31 晚上"},{"label","！预计提前耗尽"}};fixture["resetDisplay"]="12/31 中午";window.UpdateView(fixture);window.UpdateLayout();
+                foreach(string name in new[]{"forecast","resetDate","resetTime"}){var label=text(name);var measure=new FormattedText(label.Text,System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),FlowDirection.LeftToRight,new Typeface(label.FontFamily,label.FontStyle,label.FontWeight,label.FontStretch),label.FontSize,label.Foreground,1);Require(measure.Width<=label.ActualWidth+1,"summary text clips: "+name);}
+                fixture["resetCreditCount"]=0;fixture["warning"]=false;fixture["forecastDisplay"]=new Dictionary<string,object>{{"value","至重置"},{"label","预计不会耗尽"}};window.UpdateView(fixture);
+                Require(text("resetTime").Text=="重置时间 · 无重置券","zero coupons are unclear");Require(((SolidColorBrush)text("forecastLabel").Foreground).Color!=warning,"warning color persisted after recovery");
+            }finally{window.Close();}
+        });
+        Check("value updates fade out then in and discard superseded samples", delegate {
+            var label=new TextBlock{Text="78%"};var window=new Window{Content=label,Width=150,Height=100,ShowActivated=false};window.Show();window.UpdateLayout();
+            try{TextTransition.Set(label,"77%");Pump(55);if(SystemParameters.ClientAreaAnimation)Require(label.Opacity<1 && label.Text=="78%","old value did not fade before replacement");TextTransition.Set(label,"76%");Pump(400);Require(label.Text=="76%" && Math.Abs(label.Opacity-1)<.001,"newest value failed to settle");TextTransition.Set(label,"76%");Require(!label.HasAnimatedProperties,"unchanged value reanimated");}
+            finally{window.Close();}
+        });
+        Check("detail quota refresh preserves rows and updates independent quota changes", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            fixture["otherQuotas"]=new object[]{new Dictionary<string,object>{{"name","其他额度"},{"value","80%"}}};
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);
+            var rows=(StackPanel)typeof(CompanionWindow).GetField("accountRows",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            var row=(Grid)rows.Children[0];fixture["otherQuotas"]=new object[]{new Dictionary<string,object>{{"name","其他额度"},{"value","79%"}}};window.UpdateView(fixture);
+            Require(Object.ReferenceEquals(row,rows.Children[0]),"quota refresh rebuilt the visual row");Require(row.Children.OfType<TextBlock>().Single().Text=="79%","independent quota update was skipped");window.Close();
+        });
         return failures == 0 ? 0 : 1;
     }
+    private static void Pump(int milliseconds) { var frame=new System.Windows.Threading.DispatcherFrame();var timer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(milliseconds)};timer.Tick+=delegate{timer.Stop();frame.Continue=false;};timer.Start();System.Windows.Threading.Dispatcher.PushFrame(frame); }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root) {
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) { var child = VisualTreeHelper.GetChild(root, i); yield return child; foreach (var next in Descendants(child)) yield return next; }
     }

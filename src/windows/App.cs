@@ -61,7 +61,7 @@ namespace CodexPetCredits {
         private TextBlock amount, quotaLabel, forecast, forecastLabel, subTitle, total, totalLabel, intervalLabel, recentHour, recentDay, reset, status, coverage;
         private Button smoothButton, themeButton;
         private Button selectionButton, titleButton;
-        private TextBlock resetDate, resetTime, resetCoupons;
+        private TextBlock resetDate, resetTime;
         private Expander modelsDisclosure, accountsDisclosure;
         private Brush primary, muted, accentBrush;
 
@@ -105,12 +105,12 @@ namespace CodexPetCredits {
             for(int i=0;i<3;i++){int mode=i;var button=ActionButton(icons[i],new[]{"极简","趋势","详细"}[i],delegate{ChangeSetting("density",density==mode?0:mode);});button.Content=new System.Windows.Shapes.Path{Data=Geometry.Parse(paths[i]),Stroke=Brushes.Gray,StrokeThickness=1.3,Width=12,Height=12,Stretch=Stretch.Uniform};modeButtons.Add(button);modes.Children.Add(button);}
             modes.Children.Add(ActionButton("⋯","外观设置",delegate{preferences.Visibility=preferences.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;}));
             header.Children.Add(Text("CODEX  /  用量",10));layout.Children.Add(header);
-            var summary = new Grid();for(int i=0;i<3;i++)summary.ColumnDefinitions.Add(new ColumnDefinition());
-            var quota = new StackPanel();amount=Text("—",26,true);amount.Height=36;quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);quota.Children.Add(Text(" ",10));
+            var summary = new Grid();foreach(double weight in new[]{.8,1.4,1.4})summary.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(weight,GridUnitType.Star)});
+            var quota = new StackPanel();amount=Text("—",24,true);amount.Height=36;quotaLabel=Text("周额度剩余",10);quota.Children.Add(amount);quota.Children.Add(quotaLabel);
             summary.Children.Add(Card(quota,new Thickness(0,0,4,0)));
-            var prediction = new StackPanel();forecast=Text("学习中",26,true);forecast.Height=36;forecastLabel=Text("耗尽预测",10);prediction.Children.Add(forecast);prediction.Children.Add(forecastLabel);prediction.Children.Add(Text(" ",10));
+            var prediction = new StackPanel();forecast=Text("学习中",24,true);forecast.Height=36;forecastLabel=Text("耗尽预测",10);prediction.Children.Add(forecast);prediction.Children.Add(forecastLabel);
             var predictionCard=Card(prediction,new Thickness(2,0,2,0));Grid.SetColumn(predictionCard,1);summary.Children.Add(predictionCard);
-            var resetStack=new StackPanel();resetDate=Text("—",26,true);resetDate.Height=36;resetTime=Text("额度重置",10);resetCoupons=Text("券数读取中",10);resetStack.Children.Add(resetDate);resetStack.Children.Add(resetTime);resetStack.Children.Add(resetCoupons);
+            var resetStack=new StackPanel();resetDate=Text("—",24,true);resetDate.Height=36;resetTime=Text("重置时间 · 券数读取中",10);resetStack.Children.Add(resetDate);resetStack.Children.Add(resetTime);
             var resetCard=Card(resetStack,new Thickness(4,0,0,0));Grid.SetColumn(resetCard,2);summary.Children.Add(resetCard);layout.Children.Add(summary);
             layout.Children.Add(trend);trend.Margin=new Thickness(0,10,0,0);
             var filters = new StackPanel { VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(10,0,0,0) };
@@ -201,7 +201,7 @@ namespace CodexPetCredits {
         }
         private void ApplySettings() {
             updating=true;density=(int)Json.Number(settings,"density");dark=Json.Text(settings,"theme","dark")!="light";accent=Json.Text(settings,"accent","mint");
-            Width=368;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
+            Width=432;trend.Visibility=density>=1?Visibility.Visible:Visibility.Collapsed;detail.Visibility=density==2?Visibility.Visible:Visibility.Collapsed;
             scope.SelectedIndex=Math.Max(0,Array.IndexOf(new[]{"current","account","tasks","projects"},Json.Text(settings,"scope","current")));range.SelectedItem=Json.Text(settings,"range","24h");
             opacity.Value=Json.Number(settings,"opacity",90);themeButton.Content=dark?"深色":"浅色";smoothButton.Content=Json.Text(settings,"smoothing","smooth")=="smooth"?"平滑":"原值";
             ApplyTheme();updating=false;
@@ -236,22 +236,25 @@ namespace CodexPetCredits {
             UpdateContent();
         }
         private static string Credit(object data,string key) { return Json.Get(data,key)==null?"—":Json.Number(data,key).ToString("N1"); }
+        private void UpdateText(TextBlock element,string value) { TextTransition.Set(element,value,!testMode); }
         private void UpdateContent() {
             if(state==null)return;
-            amount.Text=Json.Get(state,"remaining")==null?"—":Json.Number(state,"remaining").ToString("0")+"%";
+            UpdateText(amount,Json.Get(state,"remaining")==null?"—":Json.Number(state,"remaining").ToString("0")+"%");
             quotaLabel.Text=Json.Text(state,"quotaLabel").Contains("周")?"周额度剩余":"额度剩余";
-            forecast.Text=Json.Text(Json.Get(state,"forecastDisplay"),"value","学习中");
-            forecastLabel.Text=(Json.Flag(state,"warning")?"! ":"")+Json.Text(Json.Get(state,"forecastDisplay"),"label","耗尽预测");
+            UpdateText(forecast,Json.Text(Json.Get(state,"forecastDisplay"),"value","学习中"));
+            string predictionLabel=Json.Text(Json.Get(state,"forecastDisplay"),"label","耗尽预测");UpdateText(forecastLabel,predictionLabel);
+            // The caution color is semantic and independent of the selected accent color.
+            forecastLabel.Foreground=predictionLabel=="！预计提前耗尽"?new SolidColorBrush(dark?Color.FromRgb(246,205,97):Color.FromRgb(139,100,0)):muted;
             forecastLabel.ToolTip=Json.Flag(state,"warning")?"预计在重置前耗尽":"结合工作习惯估计";
-            resetDate.Text=Json.Text(state,"resetDate","—");resetTime.Text=Json.Text(state,"resetTime")+" 重置";
-            resetCoupons.Text=Json.Get(state,"resetCreditCount")==null?"券数暂不可用":"重置券 "+Json.Number(state,"resetCreditCount").ToString("0")+" 张";
+            UpdateText(resetDate,Json.Text(state,"resetDisplay","—"));
+            UpdateText(resetTime,"重置时间 · "+(Json.Get(state,"resetCreditCount")==null?"券数未知":Json.Number(state,"resetCreditCount")==0?"无重置券":Json.Number(state,"resetCreditCount").ToString("0")+" 张重置券"));
             forecast.ToolTip="结合工作习惯与近期速度";
             string title=Json.Text(settings,"scope","current")=="current"?Json.Text(state,"taskTitle","暂无任务"):Json.Text(state,"subtitle","本机已记录");
             subTitle.Tag=title;subTitle.Text=UiText.Short(title,30);
             string scopeKey=Json.Text(settings,"scope","current");bool comparison=scopeKey=="tasks" || scopeKey=="projects";
             titleButton.Visibility=scopeKey=="current"?Visibility.Visible:Visibility.Collapsed;selectionButton.Visibility=comparison?Visibility.Visible:Visibility.Collapsed;
             selectionButton.Content="选择"+(scopeKey=="projects"?"项目":"任务")+" · "+Json.Items(Json.Get(state,"series")).Count()+" 项";
-            total.Text=Credit(state,"total")+" cr";
+            UpdateText(total,Credit(state,"total")+" cr");
             totalLabel.Text=comparison?"已选合计":"时段消耗";
             totalLabel.ToolTip="图中曲线在所选时段内的消耗合计";
             double minutes=(Json.Number(state,"windowEnd")-Json.Number(state,"windowStart"))/48/60000;
@@ -263,23 +266,44 @@ namespace CodexPetCredits {
             chart.Start=Epoch(Json.Number(state,"windowStart"));chart.End=Epoch(Json.Number(state,"windowEnd"));
             chart.ObservedAt=Json.Get(state,"observedAt")==null?chart.End:Epoch(Json.Number(state,"observedAt"));
             chart.SetSeries(series.Select(s=>Json.Items(Json.Get(s,"points")).Select(v=>v==null?(double?)null:Convert.ToDouble(v)).ToArray()).ToList());
-            recentHour.Text=Credit(Json.Get(state,"recentCredits"),"hour");recentDay.Text=Credit(Json.Get(state,"recentCredits"),"day");
-            reset.Text="额度重置  "+Json.Text(state,"resetLabel");
-            status.Text=Json.Get(state,"updated")==null?"等待额度数据":Json.Number(state,"updated")>300?"额度更新暂停":"额度已更新 · 消耗来自本机";
-            coverage.Text=Json.Text(state,"coverage")+"\n\n"+Json.Text(state,"forecastDetail")+"\n\n平滑仅影响曲线形状；悬停显示区间原值，合计保持原始估算。\n费率 "+Json.Text(state,"rateVersion");
-            string signature=Json.Serializer.Serialize(new object[]{series.Select(s=>new[]{Json.Text(s,"name"),Credit(s,"total")}),Json.Get(state,"details"),Json.Get(state,"other"),Json.Get(state,"officialTaskCredits"),dark,accent});
+            UpdateText(recentHour,Credit(Json.Get(state,"recentCredits"),"hour"));UpdateText(recentDay,Credit(Json.Get(state,"recentCredits"),"day"));
+            UpdateText(reset,"额度重置  "+Json.Text(state,"resetLabel"));
+            UpdateText(status,Json.Get(state,"updated")==null?"等待额度数据":Json.Number(state,"updated")>300?"额度更新暂停":"额度已更新 · 消耗来自本机");
+            UpdateText(coverage,Json.Text(state,"coverage")+"\n\n"+Json.Text(state,"forecastDetail")+"\n\n平滑仅影响曲线形状；悬停显示区间原值，合计保持原始估算。\n费率 "+Json.Text(state,"rateVersion"));
+            string signature=Json.Serializer.Serialize(new object[]{series.Select(s=>new[]{Json.Text(s,"name"),Credit(s,"total")}),Json.Get(state,"details"),Json.Get(state,"otherQuotas"),Json.Get(state,"officialTaskCredits"),dark,accent});
             if(signature==detailSignature)return;detailSignature=signature;
-            legendRows.Children.Clear();
-            if(series.Length>1)for(int i=0;i<Math.Min(5,series.Length);i++)AddRow(legendRows,Json.Text(series[i],"name"),Credit(series[i],"total")+" cr",Palette.Series(accent,dark,i));
-            modelRows.Children.Clear();
-            foreach(var model in Json.Items(Json.Get(state,"details")).Take(5))AddRow(modelRows,Json.Text(model,"name"),Json.Text(model,"value"),null);
-            if(modelRows.Children.Count==0)AddRow(modelRows,"暂无模型记录","—",null);
-            accountRows.Children.Clear();foreach(var row in Json.Items(Json.Get(state,"otherQuotas")))AddRow(accountRows,Json.Text(row,"name"),Json.Text(row,"value"),null);
-            if(Json.Get(state,"officialTaskCredits")!=null)AddRow(accountRows,"当前任务 · 服务端累计",Credit(state,"officialTaskCredits")+" cr",null);
+            var legends=new List<RowValue>();
+            if(series.Length>1)for(int i=0;i<Math.Min(5,series.Length);i++)legends.Add(new RowValue(Json.Text(series[i],"name"),Credit(series[i],"total")+" cr",Palette.Series(accent,dark,i)));
+            UpdateRows(legendRows,legends);
+            var models=Json.Items(Json.Get(state,"details")).Take(5).Select(m=>new RowValue(Json.Text(m,"name"),Json.Text(m,"value"))).ToList();
+            if(models.Count==0)models.Add(new RowValue("暂无模型记录","—"));UpdateRows(modelRows,models);
+            var accounts=Json.Items(Json.Get(state,"otherQuotas")).Select(r=>new RowValue(Json.Text(r,"name"),Json.Text(r,"value"))).ToList();
+            if(Json.Get(state,"officialTaskCredits")!=null)accounts.Add(new RowValue("当前任务 · 服务端累计",Credit(state,"officialTaskCredits")+" cr"));
+            UpdateRows(accountRows,accounts);
             accountsDisclosure.Visibility=accountRows.Children.Count==0?Visibility.Collapsed:Visibility.Visible;
         }
+        private sealed class RowValue {
+            public readonly string Title,Value;public readonly Color? Color;
+            public RowValue(string title,string value,Color? color=null){Title=title;Value=value;Color=color;}
+        }
+        private void UpdateRows(StackPanel target,List<RowValue> values) {
+            // Retain matching visual rows so changed numbers can fade without rebuilding the panel.
+            for(int i=0;i<values.Count;i++) {
+                var value=values[i];var row=i<target.Children.Count?target.Children[i] as Grid:null;
+                if(row==null || Convert.ToString(row.Tag)!=value.Title) {
+                    if(row!=null)target.Children.RemoveAt(i);
+                    AddRow(target,value.Title,value.Value,value.Color);
+                    row=(Grid)target.Children[target.Children.Count-1];target.Children.Remove(row);target.Children.Insert(i,row);
+                } else {
+                    var button=(Button)row.Children[0];((TextBlock)button.Content).Foreground=muted;
+                    var number=row.Children.OfType<TextBlock>().Single();number.Foreground=primary;UpdateText(number,value.Value);
+                    var dot=row.Children.OfType<System.Windows.Shapes.Ellipse>().FirstOrDefault();if(dot!=null && value.Color.HasValue)dot.Fill=new SolidColorBrush(value.Color.Value);
+                }
+            }
+            while(target.Children.Count>values.Count)target.Children.RemoveAt(target.Children.Count-1);
+        }
         private void AddRow(StackPanel target,string title,string value,Color? color) {
-            var row=new Grid{Margin=new Thickness(0,4,0,0)};row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+            var row=new Grid{Tag=title,Margin=new Thickness(0,4,0,0)};row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
             var name=new TextBlock{Text=UiText.Short(title,26),FontSize=10,Foreground=muted,TextTrimming=TextTrimming.CharacterEllipsis,VerticalAlignment=VerticalAlignment.Center};
             var titleButton=ActionButton("","查看完整名称",delegate{ShowTitle(title);},Double.NaN);titleButton.Content=name;titleButton.Height=19;titleButton.Padding=new Thickness(color.HasValue?12:0,0,0,0);titleButton.HorizontalContentAlignment=HorizontalAlignment.Left;titleButton.BorderThickness=new Thickness(0);row.Children.Add(titleButton);
             if(color.HasValue)row.Children.Add(new System.Windows.Shapes.Ellipse{Width=4,Height=4,Fill=new SolidColorBrush(color.Value),HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Center,IsHitTestVisible=false});

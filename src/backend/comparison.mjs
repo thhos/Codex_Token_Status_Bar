@@ -7,14 +7,21 @@ export function comparisonGroups(catalog, selectedIds, maximum = 5) {
   return { groups, choices: sorted.map(({ id, name, total }) => ({ id, name, total, selected: ids.includes(id) })) };
 }
 
+// Use the same coarse clock vocabulary for depletion and scheduled resets.
+export function datePeriod(timestamp) {
+  if (!Number.isFinite(timestamp)) return '—';
+  const date = new Date(timestamp), hour = date.getHours();
+  const period = hour < 6 ? '凌晨' : hour < 11 ? '早上' : hour < 14 ? '中午' : hour < 18 ? '下午' : '晚上';
+  return `${date.getMonth() + 1}/${date.getDate()} ${period}`;
+}
+
 export function forecastPresentation(prediction) {
   if (prediction.label === '额度已用尽') return { value: '已用尽', label: '等待重置' };
   if (prediction.label === '等待重置更新') return { value: '待更新', label: '等待重置' };
   if (Number.isFinite(prediction.exhaustion)) {
-    const date = new Date(prediction.exhaustion), hour = date.getHours();
-    return { value: hour < 6 ? '凌晨' : hour < 12 ? '早上' : hour < 18 ? '下午' : '晚上', label: `${date.getMonth() + 1}/${date.getDate()} 耗尽` };
+    return { value: datePeriod(prediction.exhaustion), label: '！预计提前耗尽' };
   }
-  if (prediction.label === '预计可用至重置') return { value: '充足', label: '可用至重置' };
+  if (prediction.label === '预计可用至重置') return { value: '至重置', label: '预计不会耗尽' };
   return { value: prediction.label === '数据待更新' ? '待更新' : '学习中', label: '耗尽预测' };
 }
 
