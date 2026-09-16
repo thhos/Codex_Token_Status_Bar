@@ -14,6 +14,14 @@ test('cached input and reasoning output are not counted twice; fast is model-spe
   assert.equal(estimateCredits({ ...usage, cached_input_tokens: 2e6 }, 'gpt-5.5', 'default', card), null);
 });
 
+test('user-confirmed internal model aliases use matching standard and fast rates', () => {
+  const usage = { input_tokens: 1_000_000, cached_input_tokens: 200_000, output_tokens: 100_000 };
+  for (const [alias, model] of [['codex-auto-review', 'gpt-5.4'], ['gpt-reserve', 'gpt-5.6-luna']]) {
+    for (const tier of ['default', 'fast']) assert.equal(estimateCredits(usage, alias, tier, card), estimateCredits(usage, model, tier, card));
+  }
+  assert.equal(estimateCredits(usage, 'unmapped-internal-model', 'default', card), null);
+});
+
 test('quota uses codex bucket and duration rather than primary/secondary assumptions', () => {
   const q = selectQuota({ rateLimitsByLimitId: { codex: { primary: { usedPercent: 6, windowDurationMins: 10080, resetsAt: 42 } }, spark: { primary: { usedPercent: 95, windowDurationMins: 300 } } } });
   assert.equal(q.remaining, 94); assert.equal(q.windowDurationMins, 10080);

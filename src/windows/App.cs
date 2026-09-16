@@ -49,6 +49,8 @@ namespace CodexPetCredits {
         private readonly Dictionary<string, object> pendingSettings = new Dictionary<string, object>();
         private readonly Border panel = new Border { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Padding = new Thickness(13) };
         private readonly StackPanel layout = new StackPanel(), trend = new StackPanel(), detail = new StackPanel(), preferences = new StackPanel();
+        private readonly DockPanel header = new DockPanel { Margin = new Thickness(0,0,0,9) };
+        private readonly DispatcherTimer headerTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         private readonly StackPanel legendRows = new StackPanel(), modelRows = new StackPanel(), accountRows = new StackPanel();
         private readonly List<TextBlock> labels = new List<TextBlock>(), values = new List<TextBlock>();
         private readonly List<Border> cards = new List<Border>();
@@ -71,16 +73,30 @@ namespace CodexPetCredits {
             Topmost = true; ShowInTaskbar = false; ShowActivated = false; FontFamily = new FontFamily("Microsoft YaHei UI"); FontSize = 11;
             UseLayoutRounding = true; SnapsToDevicePixels = true;
             Content = panel;
-            panel.Child = new ScrollViewer { Content = layout, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            panel.Child = new ScrollViewer { Content = new AnimatedLayout{Child=layout,AnimateChanges=!testing}, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             BuildLayout(); ApplySettings();
+            SetHeaderVisible(testing);
+            MouseEnter+=delegate{headerTimer.Stop();SetHeaderVisible(true);};
+            MouseLeave+=delegate{headerTimer.Start();};
+            headerTimer.Tick+=delegate{
+                if(IsMouseOver || scope.IsDropDownOpen || range.IsDropDownOpen || selectionPopup.IsOpen || titlePopup.IsOpen || (panel.ContextMenu!=null && panel.ContextMenu.IsOpen))return;
+                headerTimer.Stop();SetHeaderVisible(false);
+            };
+            PreviewKeyDown+=delegate(object sender,KeyEventArgs e){if(e.Key==Key.Tab){headerTimer.Stop();SetHeaderVisible(true);}};
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if(e.Key == Key.Escape) { titlePopup.IsOpen = false; preferences.Visibility = Visibility.Collapsed; ChangeSetting("density",0); } };
             SourceInitialized += OnSourceInitialized;
             Closed += delegate {
-                hiddenTimer.Stop(); CompositionTarget.Rendering -= OnRendering; titlePopup.IsOpen = false; selectionPopup.IsOpen = false;
+                hiddenTimer.Stop();headerTimer.Stop(); CompositionTarget.Rendering -= OnRendering; titlePopup.IsOpen = false; selectionPopup.IsOpen = false;
                 if(hook != IntPtr.Zero)Native.UnhookWinEvent(hook);
                 Send(new Dictionary<string,object>{{"type","shutdown"}});
                 if(backend != null)try{backend.StandardInput.Close();}catch{}
             };
+        }
+        private void SetHeaderVisible(bool visible){
+            // Keep the header's space stable so revealing controls cannot move the panel away from the pointer.
+            header.IsHitTestVisible=visible;double target=visible?1:0;double from=header.Opacity;
+            header.BeginAnimation(UIElement.OpacityProperty,null);header.Opacity=target;
+            if(!testMode && IsLoaded && SystemParameters.ClientAreaAnimation)header.BeginAnimation(UIElement.OpacityProperty,new DoubleAnimation(from,target,TimeSpan.FromMilliseconds(150)){FillBehavior=FillBehavior.Stop});
         }
         private TextBlock Text(string text, double size, bool value = false) {
             var label = new TextBlock { Text = text, FontSize = size, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -97,7 +113,6 @@ namespace CodexPetCredits {
             AutomationProperties.SetName(button,hint);button.Click += delegate { action(); };return button;
         }
         private void BuildLayout() {
-            var header = new DockPanel { Margin = new Thickness(0,0,0,9) };
             var modes = new StackPanel { Orientation = Orientation.Horizontal }; DockPanel.SetDock(modes,Dock.Right); header.Children.Add(modes);
             var icons = new[]{"−","∿","≡"};
             string[] paths={"M 1,6 L 12,6","M 1,10 L 4,5 L 7,8 L 12,2","M 2,2 L 12,2 M 2,6 L 12,6 M 2,10 L 9,10"};
@@ -136,10 +151,10 @@ namespace CodexPetCredits {
             recent.Children.Add(Card(hourStack,new Thickness(0,0,4,0)));
             var dayStack=new StackPanel();recentDay=Text("—",19,true);dayStack.Children.Add(recentDay);dayStack.Children.Add(Text("本机近 24h",10));
             var dayCard=Card(dayStack,new Thickness(4,0,0,0));Grid.SetColumn(dayCard,1);recent.Children.Add(dayCard);detail.Children.Add(recent);
-            modelsDisclosure=Disclosure("模型构成 · 所选时段",modelRows);detail.Children.Add(modelsDisclosure);
+            modelsDisclosure=Disclosure("模型使用量",modelRows);detail.Children.Add(modelsDisclosure);
             accountsDisclosure=Disclosure("其他额度",accountRows);detail.Children.Add(accountsDisclosure);
             reset=Text("",10);
-            status=Text("正在连接",10);status.Margin=new Thickness(0,4,0,0);detail.Children.Add(status);
+            status=Text("正在连接",10);
             preferences.Visibility=Visibility.Collapsed;preferences.Margin=new Thickness(0,12,0,0);layout.Children.Add(preferences);
             preferences.Children.Add(Text("主题色",10));var swatches=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,6,0,10)};
             for(int i=0;i<Palette.Keys.Length;i++){int index=i;var button=ActionButton("",Palette.Names[i],delegate{ChangeSetting("accent",Palette.Keys[index]);},40);colorButtons.Add(button);swatches.Children.Add(button);}
@@ -156,7 +171,7 @@ namespace CodexPetCredits {
             foreach(var item in items)combo.Items.Add(item);
             combo.Width=width;combo.Height=27;combo.FontSize=11;combo.HorizontalAlignment=HorizontalAlignment.Left;
             AutomationProperties.SetName(combo,name);
-            combo.Template=(ControlTemplate)XamlReader.Parse(@"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='ComboBox'><Grid><ToggleButton Focusable='False' IsChecked='{Binding IsDropDownOpen,Mode=TwoWay,RelativeSource={RelativeSource TemplatedParent}}' ClickMode='Press' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}'><ToggleButton.Template><ControlTemplate TargetType='ToggleButton'><Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' CornerRadius='6'><Path Data='M 0,0 L 4,4 L 8,0' Stroke='#87949F' StrokeThickness='1.2' HorizontalAlignment='Right' VerticalAlignment='Center' Margin='0,0,8,0'/></Border></ControlTemplate></ToggleButton.Template></ToggleButton><ContentPresenter Content='{TemplateBinding SelectionBoxItem}' IsHitTestVisible='False' Margin='9,0,23,0' VerticalAlignment='Center'/><Popup x:Name='PART_Popup' Placement='Bottom' IsOpen='{TemplateBinding IsDropDownOpen}' AllowsTransparency='True' Focusable='False'><Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' Padding='3' CornerRadius='6' MinWidth='{TemplateBinding ActualWidth}'><ScrollViewer CanContentScroll='True'><ItemsPresenter x:Name='ItemsPresenter'/></ScrollViewer></Border></Popup></Grid><ControlTemplate.Triggers><Trigger Property='IsKeyboardFocusWithin' Value='True'><Setter Property='BorderBrush' Value='#879AA8'/></Trigger></ControlTemplate.Triggers></ControlTemplate>");
+            combo.Template=(ControlTemplate)XamlReader.Parse(@"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='ComboBox'><Grid><ToggleButton Focusable='False' IsChecked='{Binding IsDropDownOpen,Mode=TwoWay,RelativeSource={RelativeSource TemplatedParent}}' ClickMode='Press' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}'><ToggleButton.Template><ControlTemplate TargetType='ToggleButton'><Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' CornerRadius='6'><Path Data='M 0,0 L 4,4 L 8,0' Stroke='#87949F' StrokeThickness='1.2' HorizontalAlignment='Right' VerticalAlignment='Center' Margin='0,0,8,0'/></Border></ControlTemplate></ToggleButton.Template></ToggleButton><ContentPresenter Content='{TemplateBinding SelectionBoxItem}' IsHitTestVisible='False' Margin='9,0,23,0' VerticalAlignment='Center'/><Popup x:Name='PART_Popup' Placement='Bottom' IsOpen='{TemplateBinding IsDropDownOpen}' AllowsTransparency='True' Focusable='False'><Border Background='{DynamicResource DropdownSurface}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' Padding='3' CornerRadius='6' MinWidth='{TemplateBinding ActualWidth}'><ScrollViewer CanContentScroll='True'><ItemsPresenter x:Name='ItemsPresenter'/></ScrollViewer></Border></Popup></Grid><ControlTemplate.Triggers><Trigger Property='IsKeyboardFocusWithin' Value='True'><Setter Property='BorderBrush' Value='#879AA8'/></Trigger></ControlTemplate.Triggers></ControlTemplate>");
         }
         private Expander Disclosure(string title,UIElement content) {
             var expander=new Expander{Header=Text(title,10),Content=content,Margin=new Thickness(0,9,0,0)};
@@ -220,7 +235,9 @@ namespace CodexPetCredits {
             smoothButton.Foreground=muted;smoothButton.BorderBrush=panel.BorderBrush;themeButton.Foreground=primary;themeButton.BorderBrush=panel.BorderBrush;selectionButton.Foreground=muted;selectionButton.BorderBrush=panel.BorderBrush;
             for(int i=0;i<colorButtons.Count;i++){var button=colorButtons[i];button.Content=new System.Windows.Shapes.Ellipse{Width=13,Height=13,Fill=new SolidColorBrush(Palette.Accent(Palette.Keys[i],dark))};button.BorderBrush=Palette.Keys[i]==accent?accentBrush:Brushes.Transparent;}
             foreach(var combo in new[]{scope,range}){
-                combo.Foreground=primary;combo.Background=new SolidColorBrush(dark?Color.FromRgb(37,40,49):Color.FromRgb(240,240,246));combo.BorderBrush=panel.BorderBrush;
+                combo.Foreground=primary;combo.Background=new SolidColorBrush(Color.FromArgb((byte)Math.Round(26*opacity.Value/100),tint.R,tint.G,tint.B));combo.BorderBrush=panel.BorderBrush;
+                // Dropdown surfaces need their own background because they live in separate native windows.
+                combo.Resources["DropdownSurface"]=new SolidColorBrush(dark?Color.FromArgb(alpha,32,35,43):Color.FromArgb(alpha,247,247,250));
                 var itemStyle=new Style(typeof(ComboBoxItem));itemStyle.Setters.Add(new Setter(Control.ForegroundProperty,primary));itemStyle.Setters.Add(new Setter(Control.PaddingProperty,new Thickness(8,7,8,7)));combo.ItemContainerStyle=itemStyle;
             }
             chart.Dark=dark;chart.Accent=accent;chart.InvalidateVisual();
@@ -259,8 +276,7 @@ namespace CodexPetCredits {
             totalLabel.ToolTip="图中曲线在所选时段内的消耗合计";
             double minutes=(Json.Number(state,"windowEnd")-Json.Number(state,"windowStart"))/48/60000;
             var series=Json.Items(Json.Get(state,"series")).ToArray();
-            bool hasGaps=series.Any(s=>{var points=Json.Items(Json.Get(s,"points")).ToArray();return points.SkipWhile(v=>v==null).Reverse().SkipWhile(v=>v==null).Any(v=>v==null);});
-            intervalLabel.Text=hasGaps?"虚线：数据不完整":"消耗趋势";
+            intervalLabel.Text="消耗趋势";
             chart.Names=series.Select(s=>Json.Text(s,"name")).ToArray();
             chart.Smooth=Json.Text(settings,"smoothing","smooth")=="smooth";
             chart.ContextKey=Json.Text(state,"chartKey",Json.Text(settings,"scope")+":"+Json.Text(settings,"range")+":"+String.Join("|",chart.Names))+":"+chart.Smooth;
@@ -340,14 +356,16 @@ namespace CodexPetCredits {
             try{backend.Start();backend.BeginOutputReadLine();backend.BeginErrorReadLine();}catch{status.Text="数据进程启动失败";}
         }
         private void Send(object message) { if(testMode || backend==null)return;try{backend.StandardInput.WriteLine(Json.Serializer.Serialize(message));backend.StandardInput.Flush();}catch{} }
-        public void RenderTo(string filename, bool showPreferences = false, bool showDetails = false) {
+        public void RenderTo(string filename, bool showPreferences = false, bool showDetails = false, int selectedBucket = -1, bool showHeader = true) {
             var previousVisibility=preferences.Visibility;bool previousModels=modelsDisclosure.IsExpanded,previousAccounts=accountsDisclosure.IsExpanded;
+            double previousHeaderOpacity=header.Opacity;header.Opacity=showHeader?1:0;chart.SelectBucket(selectedBucket);
             if(showPreferences)preferences.Visibility=Visibility.Visible;if(showDetails){modelsDisclosure.IsExpanded=true;accountsDisclosure.IsExpanded=true;}
             InvalidateMeasure();UpdateLayout();Dispatcher.Invoke(DispatcherPriority.Render,new Action(delegate{}));
             chart.FinishAnimation();Measure(new Size(Width,1000));Arrange(new Rect(0,0,Width,DesiredSize.Height));UpdateLayout();
             var target=new RenderTargetBitmap((int)Math.Ceiling(ActualWidth),(int)Math.Ceiling(ActualHeight),96,96,PixelFormats.Pbgra32);target.Render(this);
             var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(target));using(var stream=File.Create(filename))png.Save(stream);
             preferences.Visibility=previousVisibility;modelsDisclosure.IsExpanded=previousModels;accountsDisclosure.IsExpanded=previousAccounts;
+            header.Opacity=previousHeaderOpacity;chart.SelectBucket(-1);
         }
     }
 
@@ -379,6 +397,8 @@ namespace CodexPetCredits {
                     }
                     fixture["windowStart"]=Json.Number(fixture,"windowEnd")-TimeSpan.FromDays(30).TotalMilliseconds;
                     foreach(string theme in new[]{"dark","light"}){var settings=Json.Map(fixture["settings"]);settings["density"]=1;settings["theme"]=theme;settings["range"]="30d";settings["accent"]="blue";settings["smoothing"]="smooth";window.UpdateView(fixture);window.RenderTo(Path.Combine(output,theme+"-gaps.png"));}
+                    foreach(string theme in new[]{"dark","light"}){Json.Map(fixture["settings"])["theme"]=theme;window.UpdateView(fixture);window.RenderTo(Path.Combine(output,theme+"-readout.png"),false,false,8);}
+                    Json.Map(fixture["settings"])["theme"]="dark";window.UpdateView(fixture);window.RenderTo(Path.Combine(output,"dark-idle.png"),false,false,-1,false);
                     window.Close(); File.WriteAllText(Path.Combine(output, "ui-test.txt"), "PASS: all three densities rendered in light and dark themes; layout bounds valid."); return 0;
                 }
                 // Create the handle without presenting a floating window before the pet is found.

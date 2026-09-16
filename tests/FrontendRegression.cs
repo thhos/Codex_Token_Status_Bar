@@ -129,14 +129,47 @@ public static class FrontendRegression {
                 var unchanged=((List<double?[]>)typeof(CreditChart).GetField("target",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart))[0];Require(unchanged.SequenceEqual(raw),"raw mode still smooths data");
             }
         });
-        Check("chart hover opens immediately and shows rates for completed and partial intervals", delegate {
+        Check("chart selection shows inline values and time without a mouse popup", delegate {
             var start=new DateTime(2026,9,16,9,0,0);var chart=new CreditChart{Start=start,End=start.AddMinutes(2),ObservedAt=start.AddSeconds(90)};
             chart.SetSeries(new List<double?[]>{new double?[]{12,24}});
             Require(chart.DescribeBucket(0).Contains("12 cr/min"),"full-interval speed is wrong");
             Require(chart.DescribeBucket(1).Contains("48 cr/min") && chart.DescribeBucket(1).Contains("09:01:30"),"partial interval speed/time is wrong");
             var window=new Window{Content=chart,Width=350,Height=180,ShowActivated=false};window.Show();window.UpdateLayout();
-            try{typeof(CreditChart).GetField("hover",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(chart,1);typeof(CreditChart).GetMethod("UpdateTooltip",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(chart,null);Require(((ToolTip)chart.ToolTip).IsOpen,"hover tip did not open");}
+            try{
+                chart.SelectBucket(1);Require(chart.ToolTip==null,"chart still creates a mouse popup");Require(chart.SelectedValue=="24 cr · 48 cr/min" && chart.SelectedTime=="09/16 09:01:00–09:01:30","inline partial interval is wrong");
+                chart.SetSeries(new List<double?[]>{new double?[]{12,24},new double?[]{3,6}});chart.SelectBucket(1);Require(chart.SelectedValue=="合计 30 cr · 60 cr/min","multi-series readout is ambiguous");
+                chart.SetSeries(new List<double?[]>{new double?[]{12,null}});chart.SelectBucket(1);Require(chart.SelectedValue=="— cr · — cr/min","missing interval invented a value");
+                typeof(CreditChart).GetMethod("ClearHover",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(chart,null);Require(chart.SelectedValue=="" && chart.SelectedTime=="","leaving chart retains selection");
+            }
             finally{window.Close();}
+        });
+        Check("layout expansion and interrupted collapse animate to the newest height", delegate {
+            var body=new Border{Height=80,Background=Brushes.Gray};var host=new AnimatedLayout{Child=body};var window=new Window{Content=host,Width=220,SizeToContent=SizeToContent.Height,ShowActivated=false};window.Show();window.UpdateLayout();Pump(30);Require(host.IsLoaded,"animation host did not load");
+            try{
+                body.Height=320;window.UpdateLayout();Pump(60);
+                if(SystemParameters.ClientAreaAnimation)Require(host.ActualHeight>80 && host.ActualHeight<320,"layout resized without intermediate frames: "+host.ActualHeight+", desired "+host.DesiredSize.Height+", animated "+host.HasAnimatedProperties);
+                body.Height=120;window.UpdateLayout();Pump(330);Require(Math.Abs(host.ActualHeight-120)<1 && !host.HasAnimatedProperties,"interrupted animation did not settle");
+                host.AnimateChanges=false;body.Height=240;window.UpdateLayout();Require(Math.Abs(host.ActualHeight-240)<1,"disabled motion still animates");
+            }finally{window.Close();}
+        });
+        Check("compact chrome hides without layout movement and dropdowns blend with the panel", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=2;settings["opacity"]=65;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            try{
+                double height=window.ActualHeight;var header=(DockPanel)field("header");var toggle=typeof(CompanionWindow).GetMethod("SetHeaderVisible",BindingFlags.Instance|BindingFlags.NonPublic);
+                toggle.Invoke(window,new object[]{false});window.UpdateLayout();Require(header.Opacity==0 && !header.IsHitTestVisible && Math.Abs(window.ActualHeight-height)<1,"hidden header moves the window or captures input");toggle.Invoke(window,new object[]{true});Require(header.Opacity==1 && header.IsHitTestVisible,"header did not restore");
+                var visibleTexts=Descendants(window).OfType<TextBlock>().Select(t=>t.Text).ToArray();Require(!visibleTexts.Any(t=>t.Contains("额度已更新") || t.Contains("虚线：")),"removed captions remain visible");Require(visibleTexts.Contains("模型使用量"),"model section was not renamed");
+                foreach(string name in new[]{"scope","range"}){var combo=(ComboBox)field(name);Require(((SolidColorBrush)combo.Background).Color.A<80,"selector background is still opaque");combo.ApplyTemplate();combo.IsDropDownOpen=true;window.UpdateLayout();var popup=(System.Windows.Controls.Primitives.Popup)combo.Template.FindName("PART_Popup",combo);var background=((SolidColorBrush)((Border)popup.Child).Background).Color;Require(background.A>100 && background.A<200,"popup does not respect opacity setting");combo.IsDropDownOpen=false;}
+            }finally{window.Close();}
+        });
+        Check("companion density changes animate through the scroll container", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));var settings=(Dictionary<string,object>)fixture["settings"];settings["density"]=0;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Pump(30);var host=Descendants(window).OfType<AnimatedLayout>().Single();host.AnimateChanges=true;Require(host.IsLoaded,"companion animation host did not load");
+            try{
+                var frames=new List<double>();window.SizeChanged+=delegate{frames.Add(window.ActualHeight);};double collapsed=window.ActualHeight;settings["density"]=2;window.UpdateView(fixture);window.UpdateLayout();Pump(370);double expanded=window.ActualHeight;
+                Require(expanded>collapsed+200,"detail content is clipped after expansion");if(SystemParameters.ClientAreaAnimation)Require(frames.Any(height=>height>collapsed+1 && height<expanded-1),"window skipped intermediate sizes: "+String.Join(",",frames));
+                settings["density"]=0;window.UpdateView(fixture);window.UpdateLayout();Pump(330);Require(Math.Abs(window.ActualHeight-collapsed)<1,"companion did not collapse back to initial size");
+            }finally{window.Close();}
         });
         Check("summary typography aligns and task/project checkboxes apply a draft", delegate {
             var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));

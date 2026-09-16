@@ -10,7 +10,8 @@ export function usageDelta(current, previous) {
 }
 
 export function estimateCredits(usage, model, tier, card) {
-  const rate = card.models[model];
+  // Explicit user-provided aliases use the corresponding model's complete rate and speed table.
+  const rate = card.models[model] || card.models[card.modelAliases?.[model]];
   if (!rate || !usage || usage.cache_write_input_tokens > 0) return null;
   const { input_tokens: input, cached_input_tokens: cached, output_tokens: output } = usage;
   if (![input, cached, output].every(n => Number.isFinite(n) && n >= 0) || cached > input) return null;

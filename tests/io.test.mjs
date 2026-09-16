@@ -37,3 +37,27 @@ test('unknown speeds and unpriced cache-write usage are not silently priced', ()
   index.consumeLine(line('event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } }), state);
   assert.equal(index.events[0].credits, null);
 });
+
+test('a later verified rate card reprices historical calls without borrowing another model rate', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'credits-rates-'));
+  try {
+    const file = path.join(dir, 'rollout.jsonl');
+    fs.writeFileSync(file, line('session_meta', { id: 'historical-rate' })
+      + line('turn_context', { model: 'future-model', service_tier: 'default' })
+      + line('event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100 } } })
+      + line('turn_context', { model: 'gpt-5.6-sol', service_tier: 'default' })
+      + line('event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: 2000, cached_input_tokens: 0, output_tokens: 200 } } }, '2026-09-15T00:01:00Z'));
+    const original = new UsageIndex(dir, card); await original.readFile(file);
+    assert.equal(original.events[0].credits, null);
+    assert.ok(original.events[1].credits > 0);
+    const revisedCard = { ...card, version: 'verified-later', models: { ...card.models, 'future-model': { input: 50, cached: 5, output: 300, fastMultiplier: 2.5 } } };
+    const repriced = new UsageIndex(dir, revisedCard, original.snapshot()); await repriced.readFile(file);
+    assert.equal(repriced.events.length, 2);
+    assert.ok(Math.abs(repriced.events[0].credits - 0.08) < 1e-10);
+    assert.equal(repriced.events[1].credits, original.events[1].credits);
+  } finally {
+    const resolved = path.resolve(dir);
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('credits-rates-')) throw new Error('Unsafe test cleanup path');
+    fs.rmSync(resolved, { recursive: true, force: true });
+  }
+});

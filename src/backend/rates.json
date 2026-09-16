@@ -1,8 +1,13 @@
 {
-  "version": "2026-09-15",
+  "version": "2026-09-16-r1",
   "source": "https://learn.chatgpt.com/docs/pricing",
   "speedSource": "https://learn.chatgpt.com/docs/agent-configuration/speed",
   "unit": "credits per million tokens",
+  "aliasSource": "User-provided model correspondence, 2026-09-16; used for estimates",
+  "modelAliases": {
+    "codex-auto-review": "gpt-5.4",
+    "gpt-reserve": "gpt-5.6-luna"
+  },
   "models": {
     "gpt-6-astra": { "input": 250, "cached": 25, "output": 1250, "fastMultiplier": 2.5 },
     "gpt-5.6-sol": { "input": 100, "cached": 10, "output": 500, "fastMultiplier": 2.5 },

@@ -28,24 +28,26 @@ namespace CodexPetCredits {
             MouseMove += delegate(object sender, MouseEventArgs e) {
                 int count=target.Count==0?0:target[0].Length;
                 var p=e.GetPosition(this); if(count==0 || !Plot.Contains(p)){ ClearHover(); return; }
-                hover=Math.Max(0,Math.Min(count-1,(int)Math.Floor((p.X-Plot.Left)/Plot.Width*count)));
-                FinishAnimation(); UpdateTooltip(); InvalidateVisual();
+                SelectBucket(Math.Max(0,Math.Min(count-1,(int)Math.Floor((p.X-Plot.Left)/Plot.Width*count))));
             };
             MouseLeave += delegate { ClearHover(); };
             KeyDown += delegate(object sender, KeyEventArgs e) {
                 int count=target.Count==0?0:target[0].Length;
-                if(count>0 && (e.Key==Key.Left || e.Key==Key.Right)){ hover=Math.Max(0,Math.Min(count-1,(hover<0?0:hover)+(e.Key==Key.Left?-1:1))); FinishAnimation(); UpdateTooltip(); InvalidateVisual(); e.Handled=true; }
+                if(count>0 && (e.Key==Key.Left || e.Key==Key.Right)){SelectBucket(Math.Max(0,Math.Min(count-1,(hover<0?0:hover)+(e.Key==Key.Left?-1:1))));e.Handled=true;}
             };
             Unloaded += delegate { CompositionTarget.Rendering-=Animate; ClearHover(); };
             System.Windows.Automation.AutomationProperties.SetName(this,"Credits 趋势，左右键查看数据");
         }
-        private void ClearHover(){ hover=-1; if(ToolTip is ToolTip)((ToolTip)ToolTip).IsOpen=false; ToolTip=null; InvalidateVisual(); }
+        public string SelectedValue { get; private set; }
+        public string SelectedTime { get; private set; }
+        public void SelectBucket(int index){hover=index;FinishAnimation();UpdateReadout();InvalidateVisual();}
+        private void ClearHover(){hover=-1;SelectedValue="";SelectedTime="";ToolTip=null;System.Windows.Automation.AutomationProperties.SetHelpText(this,"");InvalidateVisual();}
         public void SetSeries(List<double?[]> values){
             values=values.Select(row=>row.Select(v=>v.HasValue && !Double.IsNaN(v.Value) && !Double.IsInfinity(v.Value) && v.Value>=0?v:null).ToArray()).ToList();
             raw=values; if(Smooth) values=values.Select(row=>CurveSmoothing.Apply(row,CurveSmoothing.Strength(End-Start))).ToList();
             bool contextChanged=appliedKey!=ContextKey;
             bool same=!contextChanged && values.Count==target.Count && values.Select((row,i)=>row.SequenceEqual(target[i])).All(x=>x);
-            if(same){if(hover>=0)UpdateTooltip();return;}
+            if(same){if(hover>=0){UpdateReadout();InvalidateVisual();}return;}
             var current=Current(); double currentMax=CurrentMax();
             double peak=values.SelectMany(x=>x).Where(x=>x.HasValue).Select(x=>x.Value).DefaultIfEmpty(0).Max();
             double exponent=peak<=0?1:Math.Pow(10,Math.Floor(Math.Log10(peak))), normalized=peak/exponent;
@@ -56,7 +58,7 @@ namespace CodexPetCredits {
             previous=replace?target:current; oldMax=replace?max:currentMax; started=replace?DateTime.MinValue:DateTime.UtcNow;
             CompositionTarget.Rendering-=Animate;
             if(!replace && hover<0)CompositionTarget.Rendering+=Animate; else FinishAnimation();
-            if(contextChanged)ClearHover(); else if(hover>=0)UpdateTooltip();
+            if(contextChanged)ClearHover(); else if(hover>=0)UpdateReadout();
             InvalidateVisual();
         }
         private double Progress { get { return !SystemParameters.ClientAreaAnimation?1:Math.Min(1,Math.Max(0,(DateTime.UtcNow-started).TotalMilliseconds/180)); } }
@@ -71,15 +73,18 @@ namespace CodexPetCredits {
         }
         private void Animate(object sender,EventArgs e){ InvalidateVisual(); if(Progress>=1)CompositionTarget.Rendering-=Animate; }
         public void FinishAnimation(){ started=DateTime.MinValue; CompositionTarget.Rendering-=Animate; InvalidateVisual(); }
-        private void UpdateTooltip(){
-            if(hover<0 || target.Count==0)return;
-            int count=target[0].Length; if(count==0)return;
-            var tooltip=ToolTip as ToolTip ?? new ToolTip { MaxWidth=285, PlacementTarget=this, Placement=System.Windows.Controls.Primitives.PlacementMode.MousePoint, HorizontalOffset=12, VerticalOffset=12, StaysOpen=true };
-            tooltip.Background=new SolidColorBrush(Dark?Color.FromRgb(35,39,48):Color.FromRgb(249,249,252));tooltip.Foreground=new SolidColorBrush(Dark?Color.FromRgb(228,231,239):Color.FromRgb(45,50,65));
-            tooltip.Content=new TextBlock { Text=DescribeBucket(hover),TextWrapping=TextWrapping.Wrap,MaxWidth=265,FontSize=11,Foreground=tooltip.Foreground };
-            ToolTip=tooltip;
-            // Open immediately on chart motion; relying on ToolTipService loses dynamically created tips.
-            tooltip.IsOpen=true;
+        private void UpdateReadout(){
+            if(raw.Count==0 || hover<0 || hover>=raw[0].Length){ClearHover();return;}
+            long ticks=(End-Start).Ticks/raw[0].Length;var begin=Start.AddTicks(ticks*hover);var end=begin.AddTicks(ticks);
+            if(ObservedAt>Start && ObservedAt<end)end=ObservedAt;
+            double minutes=(end-begin).TotalMinutes;
+            string format=ticks%TimeSpan.TicksPerMinute==0 && begin.Second==0 && end.Second==0?"HH:mm":"HH:mm:ss";
+            SelectedTime=begin.ToString("MM/dd "+format)+"–"+end.ToString(end.Date==begin.Date?format:"MM/dd "+format);
+            // Multiple displayed curves share an aggregate readout. Missing values never become zero.
+            bool complete=minutes>0 && raw.All(row=>hover<row.Length && row[hover].HasValue);
+            double credits=complete?raw.Sum(row=>row[hover].Value):0;
+            SelectedValue=(raw.Count>1?"合计 ":"")+(complete?credits.ToString("0.##")+" cr · "+(credits/minutes).ToString("0.##")+" cr/min":"— cr · — cr/min");
+            System.Windows.Automation.AutomationProperties.SetHelpText(this,DescribeBucket(hover));
         }
         public string DescribeBucket(int index){
             if(raw.Count==0 || raw[0].Length==0 || index<0 || index>=raw[0].Length)return "暂无记录";
@@ -102,9 +107,12 @@ namespace CodexPetCredits {
             dc.DrawRectangle(Brushes.Transparent,null,new Rect(0,0,ActualWidth,ActualHeight));
             var grid=new Pen(new SolidColorBrush(Dark?Color.FromRgb(49,55,62):Color.FromRgb(222,226,230)),1);
             for(int i=0;i<3;i++)dc.DrawLine(grid,new Point(plot.Left,plot.Top+i*plot.Height/2),new Point(plot.Right,plot.Top+i*plot.Height/2));
-            Text(dc,scale.ToString("0.##")+" cr",plot.Left,0,muted,10);
-            Text(dc,Start.ToString((End-Start).TotalDays>=2?"MM/dd":"HH:mm"),plot.Left,plot.Bottom+7,muted,10);
-            Text(dc,End.ToString((End-Start).TotalDays>=2?"MM/dd":"HH:mm"),Math.Max(plot.Left,plot.Right-32),plot.Bottom+7,muted,10);
+            if(hover>=0){CenteredText(dc,SelectedValue,0,new SolidColorBrush(Dark?Color.FromRgb(224,226,234):Color.FromRgb(49,52,65)),11);CenteredText(dc,SelectedTime,plot.Bottom+7,muted,10);}
+            else{
+                Text(dc,scale.ToString("0.##")+" cr",plot.Left,0,muted,10);
+                Text(dc,Start.ToString((End-Start).TotalDays>=2?"MM/dd":"HH:mm"),plot.Left,plot.Bottom+7,muted,10);
+                Text(dc,End.ToString((End-Start).TotalDays>=2?"MM/dd":"HH:mm"),Math.Max(plot.Left,plot.Right-32),plot.Bottom+7,muted,10);
+            }
             // Clip every animated frame, including gaps and pointer markers, to the plot.
             dc.PushClip(new RectangleGeometry(plot)); bool any=false;
             for(int i=0;i<data.Count;i++){
@@ -139,6 +147,10 @@ namespace CodexPetCredits {
         }
         private void Text(DrawingContext dc,string text,double x,double y,Brush brush,double size){
             dc.DrawText(new FormattedText(text,CultureInfo.GetCultureInfo("zh-CN"),FlowDirection.LeftToRight,new Typeface("Microsoft YaHei UI"),size,brush,VisualTreeHelper.GetDpi(this).PixelsPerDip),new Point(x,y));
+        }
+        private void CenteredText(DrawingContext dc,string text,double y,Brush brush,double size){
+            var formatted=new FormattedText(text??"",CultureInfo.GetCultureInfo("zh-CN"),FlowDirection.LeftToRight,new Typeface("Microsoft YaHei UI"),size,brush,VisualTreeHelper.GetDpi(this).PixelsPerDip){MaxTextWidth=Math.Max(1,ActualWidth-4),TextAlignment=TextAlignment.Center};
+            dc.DrawText(formatted,new Point(2,y));
         }
     }
 }
