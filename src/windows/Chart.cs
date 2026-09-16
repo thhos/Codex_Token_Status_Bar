@@ -15,6 +15,7 @@ namespace CodexPetCredits {
         private double oldMax = 1, max = 1;
         private int hover = -1;
         private string appliedKey = "";
+        private DateTime appliedStart, appliedEnd;
         public string ContextKey = "";
         public bool Dark = true;
         public bool Smooth;
@@ -40,14 +41,22 @@ namespace CodexPetCredits {
         }
         public string SelectedValue { get; private set; }
         public string SelectedTime { get; private set; }
-        public void SelectBucket(int index){hover=index;FinishAnimation();UpdateReadout();InvalidateVisual();}
-        private void ClearHover(){hover=-1;SelectedValue="";SelectedTime="";ToolTip=null;System.Windows.Automation.AutomationProperties.SetHelpText(this,"");InvalidateVisual();}
+        public void SelectBucket(int index){
+            int selected=raw.Count==0 || index<0 || index>=raw[0].Length?-1:index;
+            if(selected==hover)return;
+            if(selected<0){ClearHover();return;}
+            hover=selected;FinishAnimation();UpdateReadout();InvalidateVisual();
+        }
+        private void ClearHover(){if(hover<0)return;hover=-1;SelectedValue="";SelectedTime="";ToolTip=null;System.Windows.Automation.AutomationProperties.SetHelpText(this,"");InvalidateVisual();}
         public void SetSeries(List<double?[]> values){
             values=values.Select(row=>row.Select(v=>v.HasValue && !Double.IsNaN(v.Value) && !Double.IsInfinity(v.Value) && v.Value>=0?v:null).ToArray()).ToList();
             raw=values; if(Smooth) values=values.Select(row=>CurveSmoothing.Apply(row,CurveSmoothing.Strength(End-Start))).ToList();
             bool contextChanged=appliedKey!=ContextKey;
+            bool timeChanged=Start!=appliedStart || End!=appliedEnd;
+            appliedStart=Start;appliedEnd=End;
             bool same=!contextChanged && values.Count==target.Count && values.Select((row,i)=>row.SequenceEqual(target[i])).All(x=>x);
-            if(same){if(hover>=0){UpdateReadout();InvalidateVisual();}return;}
+            // Axis labels can change without any new samples. Redraw without restarting interpolation.
+            if(same){if(hover>=0)UpdateReadout();if(hover>=0 || timeChanged)InvalidateVisual();return;}
             var current=Current(); double currentMax=CurrentMax();
             double peak=values.SelectMany(x=>x).Where(x=>x.HasValue).Select(x=>x.Value).DefaultIfEmpty(0).Max();
             double exponent=peak<=0?1:Math.Pow(10,Math.Floor(Math.Log10(peak))), normalized=peak/exponent;

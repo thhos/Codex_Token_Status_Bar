@@ -13,10 +13,17 @@ public static class FrontendRegression {
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] private struct ScreenPoint { public int X,Y; }
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(ScreenPoint point);
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr handle,uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] private struct ScreenRect { public int Left,Top,Right,Bottom; }
+    private delegate bool MonitorCallback(IntPtr monitor,IntPtr dc,ref ScreenRect rect,IntPtr data);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr dc,IntPtr clip,MonitorCallback callback,IntPtr data);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle,IntPtr after,int x,int y,int width,int height,uint flags);
     private static int failures;
     private static void Check(string name, Action test) { try { test(); Console.WriteLine("PASS " + name); } catch (Exception e) { failures++; Console.WriteLine("FAIL " + name + ": " + e.GetBaseException().Message); } }
     private static void Require(bool value, string reason) { if (!value) throw new Exception(reason); }
     [STAThread] public static int Main(string[] args) {
+        // Match the production process: virtualized 96-DPI tests mask fractional-pixel jitter.
+        SetProcessDpiAwarenessContext(new IntPtr(-4));
         new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         Check("first chart frame stays inside plot", delegate {
             var chart = new CreditChart(); chart.Measure(new Size(320, 126)); chart.Arrange(new Rect(0, 0, 320, 126));
@@ -199,6 +206,7 @@ public static class FrontendRegression {
         });
         Check("hover reveal does not jump quota content relative to its pet anchor", delegate {
             var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            ((Dictionary<string,object>)fixture["settings"])["density"]=2;
             var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();Pump(30);
             Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
             var toggle=typeof(CompanionWindow).GetMethod("SetHeaderVisible",BindingFlags.Instance|BindingFlags.NonPublic);var host=Descendants(window).OfType<AnimatedLayout>().First();var amount=(TextBlock)field("amount");
@@ -207,9 +215,9 @@ public static class FrontendRegression {
                 double before=amount.PointToScreen(new Point()).Y;
                 var positions=new List<double>();window.LayoutUpdated+=delegate{if(window.IsVisible && PresentationSource.FromVisual(amount)!=null)positions.Add(amount.PointToScreen(new Point()).Y);};
                 toggle.Invoke(window,new object[]{true});window.UpdateLayout();double after=amount.PointToScreen(new Point()).Y;
-                Require(Math.Abs(after-before)<2,"quota jumped by "+(after-before).ToString("0.0")+" DIP before the size animation caught up");
-                Pump(320);Require(positions.All(y=>Math.Abs(y-before)<=2),"quota moved during the reveal animation");
-                toggle.Invoke(window,new object[]{false});window.UpdateLayout();Pump(320);Require(positions.All(y=>Math.Abs(y-before)<=2),"quota moved during hover collapse");
+                Require(Math.Abs(after-before)<.01,"quota jumped by "+(after-before).ToString("0.00")+" pixels before the size animation caught up");
+                Pump(320);Require(positions.All(y=>Math.Abs(y-before)<.01),"quota moved during reveal: "+positions.Max(y=>Math.Abs(y-before)).ToString("0.00")+" pixels");
+                toggle.Invoke(window,new object[]{false});window.UpdateLayout();Pump(320);Require(positions.All(y=>Math.Abs(y-before)<.01),"quota moved during hover collapse");
             }finally{window.Close();}
         });
         Check("transparent reserved viewport passes native hit testing to the window beneath", delegate {
@@ -222,6 +230,39 @@ public static class FrontendRegression {
                 Require(GetAncestor(WindowFromPoint(new ScreenPoint{X=(int)opaque.X,Y=(int)opaque.Y}),2)==front,"visible panel is not interactive");
                 Require(GetAncestor(WindowFromPoint(new ScreenPoint{X=(int)blank.X,Y=(int)blank.Y}),2)==back,"transparent viewport intercepts desktop input");
             }finally{window.Close();backdrop.Close();}
+        });
+        Check("native attachment keeps body pixel-stationary during header animation", delegate {
+            var work=SystemParameters.WorkArea;
+            var pet=new Window{Left=work.Left+work.Width/2,Top=work.Bottom-160,Width=120,Height=120,WindowStyle=WindowStyle.None,ShowActivated=false};pet.Show();
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            ((Dictionary<string,object>)fixture["settings"])["density"]=2;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();
+            Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            var follower=field("follower");var type=follower.GetType();var tick=type.GetMethod("Tick");var observe=type.GetMethod("Observe");
+            type.GetField("<PetHandle>k__BackingField",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(follower,new System.Windows.Interop.WindowInteropHelper(pet).Handle);
+            type.GetField("lastDiscovery",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(follower,DateTime.UtcNow.AddMinutes(1));
+            var handle=new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            var monitors=new List<ScreenRect>();EnumDisplayMonitors(IntPtr.Zero,IntPtr.Zero,delegate(IntPtr monitor,IntPtr dc,ref ScreenRect rect,IntPtr data){monitors.Add(rect);return true;},IntPtr.Zero);
+            var screen=monitors.OrderBy(r=>r.Left).ThenBy(r=>r.Top).First();
+            SetWindowPos(new System.Windows.Interop.WindowInteropHelper(pet).Handle,IntPtr.Zero,screen.Right-300,screen.Bottom-250,0,0,0x15);
+            SetWindowPos(handle,IntPtr.Zero,screen.Left+200,screen.Top+100,0,0,0x15);Pump(60);
+            var toggle=typeof(CompanionWindow).GetMethod("SetHeaderVisible",BindingFlags.Instance|BindingFlags.NonPublic);
+            var amount=(TextBlock)field("amount");var positions=new List<double>();double baseline=0;
+            var bodyPixels=new List<byte[]>();
+            Action follow=delegate{
+                observe.Invoke(follower,new object[]{new Dictionary<string,object>{{"pet",new Dictionary<string,object>{{"x",0.0},{"y",2.0},{"width",100.0},{"height",100.0},{"dpr",1.25}}},{"visible",true},{"observedAt",(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalMilliseconds}}});
+                tick.Invoke(follower,new object[]{window,handle});
+            };
+            EventHandler frame=delegate{follow();positions.Add(amount.PointToScreen(new Point()).Y);bodyPixels.Add(BodyPixels(window,amount));};
+            try{
+                toggle.Invoke(window,new object[]{false});window.UpdateLayout();follow();Pump(40);follow();window.UpdateLayout();baseline=amount.PointToScreen(new Point()).Y;
+                foreach(var animation in Descendants(window).OfType<AnimatedLayout>())animation.AnimateChanges=true;
+                var beforePixels=BodyPixels(window,amount);CompositionTarget.Rendering+=frame;
+                for(int cycle=0;cycle<8;cycle++){toggle.Invoke(window,new object[]{true});window.UpdateLayout();Pump(47+cycle*13);toggle.Invoke(window,new object[]{false});window.UpdateLayout();Pump(59+cycle*11);}Pump(350);
+                double movement=positions.Max(y=>Math.Abs(y-baseline));Console.WriteLine("  native header body drift="+movement.ToString("0.000")+"px; dpi="+VisualTreeHelper.GetDpi(window).DpiScaleY);
+                Require(movement<.01,"native follow moved quota by "+movement.ToString("0.000")+"px");
+                Require(bodyPixels.All(p=>p.SequenceEqual(beforePixels)),"quota raster changes during header reveal despite stable coordinates");
+            }finally{CompositionTarget.Rendering-=frame;window.Close();pet.Close();}
         });
         Check("summary typography aligns and task/project checkboxes apply a draft", delegate {
             var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
@@ -269,9 +310,79 @@ public static class FrontendRegression {
             var row=(Grid)rows.Children[0];fixture["otherQuotas"]=new object[]{new Dictionary<string,object>{{"name","其他额度"},{"value","79%"}}};window.UpdateView(fixture);
             Require(Object.ReferenceEquals(row,rows.Children[0]),"quota refresh rebuilt the visual row");Require(row.Children.OfType<TextBlock>().Single().Text=="79%","independent quota update was skipped");window.Close();
         });
+        Check("unchanged empty series still refreshes the scrolling time axis", delegate {
+            var chart=new CreditChart{Start=new DateTime(2026,9,16,10,0,0),End=new DateTime(2026,9,16,11,0,0),ContextKey="account:1h"};
+            chart.SetSeries(new List<double?[]>{new double?[48]});chart.Measure(new Size(320,142));chart.Arrange(new Rect(0,0,320,142));chart.UpdateLayout();
+            var before=ChartPixels(chart);chart.Start=chart.Start.AddHours(1);chart.End=chart.End.AddHours(1);chart.SetSeries(new List<double?[]>{new double?[48]});chart.UpdateLayout();
+            Require(!before.SequenceEqual(ChartPixels(chart)),"time axis still displays the previous window");
+        });
+        Check("detail panel exposes the updated reset time", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            ((Dictionary<string,object>)fixture["settings"])["density"]=2;
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);window.Show();window.UpdateLayout();
+            try{Require(Descendants(window).OfType<TextBlock>().Any(t=>t.IsVisible && t.Text.Contains(Convert.ToString(fixture["resetLabel"]))),"reset time is absent from the detail surface");}finally{window.Close();}
+        });
+        Check("attachment uses only above or below with horizontal edge clamping", delegate {
+            var work=new Rect(0,0,1600,900);var pet=new Rect(1450,360,112,122);var placement=new AttachmentPlacement();
+            var result=placement.Place(pet,new Size(368,480),work,new[]{pet},false);
+            Require(placement.Side<=1,"panel was placed alongside the pet");
+            Require(result.Left>=work.Left && result.Right<=work.Right,"horizontal overflow");
+            Require(result.Bottom<=pet.Top || result.Top>=pet.Bottom,"height-constrained panel overlaps the pet");
+            Require(result.Height<480,"insufficient vertical space must constrain height instead of moving sideways");
+        });
+        Check("opacity preview retains theme controls and chart data", delegate {
+            var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
+            var window=new CompanionWindow(args[0],true);window.UpdateView(fixture);
+            Func<string,object> field=name=>typeof(CompanionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);
+            var chart=(CreditChart)field("chart");var series=typeof(CreditChart).GetField("target",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart);
+            var combo=(ComboBox)field("scope");var style=combo.ItemContainerStyle;var surface=(Border)field("panel");var background=surface.Background;
+            try{
+                var change=typeof(CompanionWindow).GetMethod("ChangeSetting",BindingFlags.Instance|BindingFlags.NonPublic);
+                for(int i=0;i<60;i++)change.Invoke(window,new object[]{"opacity",40.0+i});
+                Require(Object.ReferenceEquals(style,combo.ItemContainerStyle) && Object.ReferenceEquals(background,surface.Background),"opacity preview rebuilt theme resources");
+                Require(Object.ReferenceEquals(series,typeof(CreditChart).GetField("target",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart)),"opacity preview reprocessed chart series");
+                Require(((SolidColorBrush)background).Color.A==(byte)Math.Round(99*2.55),"latest opacity was not previewed");
+            }finally{window.Close();}
+        });
+        Check("slider persistence coalesces changes and flushes the final value", delegate {
+            var messages=new List<Dictionary<string,object>>();var committer=new SettingsCommitter(message=>messages.Add(message));
+            for(int i=0;i<120;i++)committer.Set("opacity",40+(i%61));
+            Require(messages.Count==0,"slider drag persisted every preview");Pump(300);
+            Require(messages.Count==1 && Convert.ToInt32(messages[0]["opacity"])==98,"debounced commit did not keep the latest value");
+            committer.Set("opacity",75);committer.Dispose();Pump(230);
+            Require(messages.Count==2 && Convert.ToInt32(messages[1]["opacity"])==75,"close lost or duplicated the final setting");
+        });
+        Check("backend transport preserves command order and drains settings on shutdown", delegate {
+            string root=Path.Combine(args[0],"artifacts","transport-test",Guid.NewGuid().ToString("N"));string backendPath=Path.Combine(root,"src","backend");Directory.CreateDirectory(backendPath);
+            // Publish the trace atomically: concurrent ReadAllLines would deny the Node writer on Windows.
+            File.WriteAllText(Path.Combine(backendPath,"main.mjs"),"import fs from 'node:fs';import readline from 'node:readline';const seen=[];readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);seen.push(m);if(m.type==='shutdown'){fs.writeFileSync('commands.tmp',JSON.stringify(seen));fs.renameSync('commands.tmp','commands.json');process.exit(0);}else console.log(JSON.stringify({type:'settings',settings:m}));});");
+            var received=new System.Collections.Concurrent.ConcurrentQueue<int>();var client=new BackendClient();
+            client.SettingsReceived+=message=>received.Enqueue(Convert.ToInt32(Json.Get(Json.Get(message,"settings"),"sequence")));
+            try{
+                client.Start(root);for(int i=0;i<120;i++)client.Send(new Dictionary<string,object>{{"type","settings"},{"sequence",i}});
+                var clock=System.Diagnostics.Stopwatch.StartNew();while(received.Count<120 && clock.ElapsedMilliseconds<4000)Pump(20);
+                Require(received.ToArray().SequenceEqual(Enumerable.Range(0,120)),"protocol writer reordered or lost settings");
+                client.Send(new Dictionary<string,object>{{"type","settings"},{"sequence",120}});client.Dispose();
+                string path=Path.Combine(root,"commands.json");while(clock.ElapsedMilliseconds<5000 && !File.Exists(path))Pump(20);
+                Require(File.Exists(path),"shutdown command was not delivered");
+                var commands=Json.Items(Json.Serializer.DeserializeObject(File.ReadAllText(path))).ToArray();
+                Require(commands.Length==122 && Json.Number(commands[120],"sequence")==120 && Json.Text(commands[121],"type")=="shutdown","shutdown bypassed pending settings");
+            }finally{client.Dispose();}
+        });
         return failures == 0 ? 0 : 1;
     }
     private static void Pump(int milliseconds) { var frame=new System.Windows.Threading.DispatcherFrame();var timer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(milliseconds)};timer.Tick+=delegate{timer.Stop();frame.Continue=false;};timer.Start();System.Windows.Threading.Dispatcher.PushFrame(frame); }
+    private static byte[] ChartPixels(CreditChart chart) {
+        chart.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render,new Action(delegate{}));
+        var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap(320,142,96,96,PixelFormats.Pbgra32);bitmap.Render(chart);
+        var pixels=new byte[320*142*4];bitmap.CopyPixels(pixels,320*4,0);return pixels;
+    }
+    private static byte[] BodyPixels(CompanionWindow window,TextBlock amount) {
+        var dpi=VisualTreeHelper.GetDpi(window);var point=amount.TranslatePoint(new Point(),window);
+        var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth*dpi.DpiScaleX),(int)Math.Ceiling(window.ActualHeight*dpi.DpiScaleY),96*dpi.DpiScaleX,96*dpi.DpiScaleY,PixelFormats.Pbgra32);
+        bitmap.Render(window);int width=(int)(amount.ActualWidth*dpi.DpiScaleX),height=(int)(amount.ActualHeight*dpi.DpiScaleY);var pixels=new byte[width*height*4];
+        bitmap.CopyPixels(new Int32Rect((int)Math.Round(point.X*dpi.DpiScaleX),(int)Math.Round(point.Y*dpi.DpiScaleY),width,height),pixels,width*4,0);return pixels;
+    }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root) {
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) { var child = VisualTreeHelper.GetChild(root, i); yield return child; foreach (var next in Descendants(child)) yield return next; }
     }

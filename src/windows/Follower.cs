@@ -61,8 +61,10 @@ namespace CodexPetCredits {
             var companion=window as CompanionWindow;
             if(companion!=null && (Math.Abs(window.Height-maxHeight)>.5 || companion.SurfaceHeight<1)){window.Height=maxHeight;window.UpdateLayout();}
             int previousSide = placement.Side;
-            var destination = placement.Place(pet, new Size(window.Width * dpi, Math.Max(1, companion==null?window.ActualHeight:companion.SurfaceHeight) * dpi), work, obstacles, Dragging);
-            if(companion!=null)companion.SetAttachmentSide(placement.Side);
+            double requestedHeight=Math.Max(1,companion==null?window.ActualHeight:companion.RequestedSurfaceHeight)*dpi;
+            var destination = placement.Place(pet, new Size(window.Width*dpi,requestedHeight), work, obstacles, Dragging);
+            // A limit is needed only when space actually runs out, not on every animation frame.
+            if(companion!=null){companion.SetSurfaceHeightLimit(destination.Height<requestedHeight-.01?destination.Height/dpi:Double.PositiveInfinity);companion.SetAttachmentSide(placement.Side);}
             if (!first && previousSide != placement.Side && SystemParameters.ClientAreaAnimation) {
                 transition = new AttachmentTransition(new Rect(x, y, destination.Width, destination.Height), destination, work, obstacles);
                 transitionStarted = now; transitionAnchor = pet.TopLeft; transitionTarget = destination.TopLeft;
@@ -82,7 +84,10 @@ namespace CodexPetCredits {
             first = false;
             if (Math.Abs(window.Opacity - opacity) > .001) window.Opacity = opacity;
             // Placement uses the painted panel, excluding the fully transparent reserved viewport.
-            int nextX = (int)Math.Round(x), nextY = (int)Math.Round(y-(companion==null?0:companion.SurfaceOffset*dpi));
+            // Anchor the native viewport to the fixed edge, not the difference of two animated heights.
+            double nativeTop=y-(companion==null?0:companion.SurfaceOffset*dpi);
+            if(companion!=null && transition==null)nativeTop=placement.Side==0?destination.Bottom-window.ActualHeight*dpi:destination.Top;
+            int nextX = (int)Math.Round(x), nextY = (int)Math.Round(nativeTop);
             // Preserve popup z-order and skip stationary frames. Raising the main HWND hides its dropdowns.
             if (nextX != placedX || nextY != placedY) { Native.SetWindowPos(handle, IntPtr.Zero, nextX, nextY, 0, 0, 0x0010 | 0x0001 | 0x0004); placedX = nextX; placedY = nextY; }
             if (!window.IsVisible) window.Show();

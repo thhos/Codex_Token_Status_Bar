@@ -12,27 +12,29 @@ namespace CodexPetCredits {
             return units.Length <= length ? text : text.Substring(0, units[Math.Max(1, length - 1)]) + "…";
         }
     }
-    // Prefer above/below the pet. Use another direction only when the work area requires it.
+    // Attach above or below; clamp horizontally and constrain height when vertical space is limited.
     public sealed class AttachmentPlacement {
         private int side = -1;
         public int Side { get { return side; } }
         public Rect Place(Rect pet, Size size, Rect work, IEnumerable<Rect> occupied, bool dragging) {
-            const double gap = 14;
-            var avoid = new List<Rect>(occupied ?? Enumerable.Empty<Rect>()) { pet };
-            var envelope = pet;
-            foreach (var obstacle in avoid) envelope.Union(obstacle);
-            var candidates = new[] {
-                new Rect(pet.Left+(pet.Width-size.Width)/2, envelope.Top-size.Height-gap,size.Width,size.Height),
-                new Rect(pet.Left+(pet.Width-size.Width)/2, envelope.Bottom+gap,size.Width,size.Height),
-                new Rect(envelope.Right+gap, pet.Top+(pet.Height-size.Height)/2,size.Width,size.Height),
-                new Rect(envelope.Left-gap-size.Width, pet.Top+(pet.Height-size.Height)/2,size.Width,size.Height)
-            };
-            var bounded = candidates.Select(r => new Rect(Math.Max(work.Left+8,Math.Min(r.X,work.Right-size.Width-8)),Math.Max(work.Top+8,Math.Min(r.Y,work.Bottom-size.Height-8)),size.Width,size.Height)).ToArray();
-            Func<Rect,double> overlap = r => avoid.Sum(a => { var padded=a; padded.Inflate(6,6); var intersection=Rect.Intersect(r,padded); return intersection.IsEmpty?0:intersection.Width*intersection.Height; });
-            bool aboveComfortable = candidates[0].Top >= work.Top + 40 && overlap(bounded[0]) == 0;
-            if(side>=0 && overlap(bounded[side])==0 && (side==0 || dragging || !aboveComfortable))return bounded[side];
-            side=Enumerable.Range(0,4).OrderBy(i=>overlap(bounded[i])*100+Math.Abs(bounded[i].X-candidates[i].X)+Math.Abs(bounded[i].Y-candidates[i].Y)+(i<2?i:200+i)).First();
-            return bounded[side];
+            const double gap=14,edge=8;
+            var envelope=pet;
+            foreach(var obstacle in occupied??Enumerable.Empty<Rect>())envelope.Union(obstacle);
+            double above=Math.Max(1,envelope.Top-gap-work.Top-edge);
+            double below=Math.Max(1,work.Bottom-edge-envelope.Bottom-gap);
+            bool aboveFits=above>=size.Height,belowFits=below>=size.Height;
+            // Keep a usable side during dragging. When neither fits, scroll inside the larger space.
+            if(side==0 && aboveFits){}
+            else if(side==1 && belowFits && (dragging || above<size.Height+32)){}
+            else if(aboveFits)side=0;
+            else if(belowFits)side=1;
+            else side=above>=below?0:1;
+            double height=Math.Min(size.Height,side==0?above:below);
+            double width=Math.Min(size.Width,Math.Max(1,work.Width-2*edge));
+            double x=Math.Max(work.Left+edge,Math.Min(pet.Left+(pet.Width-width)/2,work.Right-width-edge));
+            double y=side==0?envelope.Top-gap-height:envelope.Bottom+gap;
+            y=Math.Max(work.Top+edge,Math.Min(y,work.Bottom-height-edge));
+            return new Rect(x,y,width,height);
         }
     }
 

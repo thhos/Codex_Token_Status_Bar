@@ -148,6 +148,8 @@ async function pollPet() {
   finally { petBusy = false; }
 }
 function updateSettings(message) {
+  const dataKeys = ['range', 'scope', 'selectedTasks', 'selectedProjects'];
+  const before = dataKeys.map(key => JSON.stringify(settings[key]));
   if (Number.isFinite(message.opacity)) settings.opacity = Math.max(40, Math.min(100, message.opacity));
   if ([0, 1, 2].includes(message.density)) settings.density = message.density;
   if (ranges[message.range]) settings.range = message.range;
@@ -159,7 +161,10 @@ function updateSettings(message) {
     if (message[key] === null) delete settings[key];
     else if (Array.isArray(message[key])) settings[key] = [...new Set(message[key].filter(id => typeof id === 'string' && id.length > 0 && id.length <= 4096))].slice(0, 5);
   }
-  save('settings.json', settings); emit();
+  save('settings.json', settings);
+  // Appearance changes only need an acknowledgement; do not rebuild usage groups or chart bins.
+  if (dataKeys.some((key, i) => JSON.stringify(settings[key]) !== before[i])) emit();
+  else if (running) process.stdout.write(JSON.stringify({ type: 'settings', settings }) + '\n');
 }
 function shutdown() { if (!running) return; running = false; rpc?.close(); cdp.close(); for (const timer of timers) clearInterval(timer); setTimeout(() => process.exit(0), 1200).unref(); }
 const input = createInterface({ input: process.stdin });

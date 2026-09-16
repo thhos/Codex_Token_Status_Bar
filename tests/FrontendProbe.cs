@@ -20,6 +20,7 @@ public static class FrontendProbe {
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(NativePoint point);
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window,uint flags);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window,ref NativePoint point);
     [STAThread] public static int Main(string[] args) {
         var app = new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
         var json = new JavaScriptSerializer();
@@ -38,6 +39,7 @@ public static class FrontendProbe {
         var samples=new List<double>();var costs=new List<double>();var clock=Stopwatch.StartNew();double last=0;
         var timer=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(150)};
         int count=0;bool checkedPopup=false,popupPass=false,rangePass=false;
+        double minX=Double.NegativeInfinity,maxX=Double.PositiveInfinity,minY=Double.NegativeInfinity,maxY=Double.PositiveInfinity;
         TimeSpan rendered=TimeSpan.MinValue;
         EventHandler frame = null;
         frame=delegate(object sender,EventArgs args2) {
@@ -45,7 +47,7 @@ public static class FrontendProbe {
             double now=clock.Elapsed.TotalMilliseconds;if(last>0 && count>5)samples.Add(now-last);last=now;
             pet["observedAt"]=(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalMilliseconds;
             // Replay a moving anchor without moving the user's cursor or the real pet.
-            if(count>=30){geometry["x"]=baseX+Math.Sin((count-30)*.12)*95;geometry["y"]=baseY+Math.Sin((count-30)*.07)*40;}
+            if(count>=30){geometry["x"]=Math.Max(minX,Math.Min(maxX,baseX+Math.Sin((count-30)*.12)*95));geometry["y"]=Math.Max(minY,Math.Min(maxY,baseY+Math.Sin((count-30)*.07)*40));}
             observe.Invoke(follower,new object[]{pet});var cost=Stopwatch.StartNew();tick.Invoke(follower,new object[]{window,handle});costs.Add(cost.Elapsed.TotalMilliseconds);
             if(++count==8){var scope=(ComboBox)typeof(CompanionWindow).GetField("scope",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);scope.IsDropDownOpen=true;scope.UpdateLayout();}
             if(count==14){
@@ -64,6 +66,15 @@ public static class FrontendProbe {
             if(count==18){var range=(ComboBox)typeof(CompanionWindow).GetField("range",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);range.IsDropDownOpen=true;range.UpdateLayout();}
             if(count==24){var range=(ComboBox)typeof(CompanionWindow).GetField("range",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(window);var item=range.ItemContainerGenerator.ContainerFromIndex(3) as ComboBoxItem;var popup=(Popup)range.Template.FindName("PART_Popup",range);
                 if(item!=null && popup!=null){var p=item.PointToScreen(new Point(item.ActualWidth/2,item.ActualHeight/2));var popupHandle=((HwndSource)PresentationSource.FromVisual(popup.Child)).Handle;rangePass=GetAncestor(WindowFromPoint(new NativePoint{X=(int)p.X,Y=(int)p.Y}),2)==popupHandle;item.IsSelected=true;rangePass=rangePass && range.SelectedItem.ToString()=="7d";}range.IsDropDownOpen=false;
+            }
+            if(count==29){
+                var petHandle=(IntPtr)follower.GetType().GetProperty("PetHandle").GetValue(follower,null);var origin=new NativePoint();ClientToScreen(petHandle,ref origin);
+                double dpr=Convert.ToDouble(geometry["dpr"]),width=Convert.ToDouble(geometry["width"]),height=Convert.ToDouble(geometry["height"]);
+                var native=typeof(CompanionWindow).Assembly.GetType("CodexPetCredits.Native");var work=native.GetMethod("WorkArea").Invoke(null,new object[]{(int)(origin.X+(baseX+width/2)*dpr),(int)(origin.Y+(baseY+height/2)*dpr)});
+                Func<string,double> edge=name=>Convert.ToDouble(work.GetType().GetField(name).GetValue(work));
+                // Stay on one monitor so the test isolates resize animation from deliberate DPI migration.
+                minX=(edge("Left")+8-origin.X)/dpr;maxX=(edge("Right")-8-origin.X)/dpr-width;
+                minY=(edge("Top")+8-origin.Y)/dpr;maxY=(edge("Bottom")-8-origin.Y)/dpr-height;
             }
             if(count==40){((Dictionary<string,object>)fixture["settings"])["density"]=2;window.UpdateView(fixture);}
             if(count==64){watchCollapse=true;((Dictionary<string,object>)fixture["settings"])["density"]=0;window.UpdateView(fixture);}
