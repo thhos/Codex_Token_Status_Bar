@@ -104,6 +104,31 @@ public static class FrontendRegression {
                 foreach(var expander in Descendants(window).OfType<Expander>().ToArray())expander.IsExpanded=true;window.UpdateLayout();Require(window.ActualHeight<850,"details overflow the panel");
             }finally{window.Close();}
         });
+        Check("chart bridges bounded gaps with dashes without inventing hover values", delegate {
+            var start=new DateTime(2026,9,1);var chart=new CreditChart{Start=start,End=start.AddDays(30),ObservedAt=start.AddDays(30),Smooth=true};
+            var values=new List<double?[]>{new double?[]{null,10,null,null,20,null},new double?[]{null,null,4,null,null,null}};
+            chart.Measure(new Size(320,142));chart.Arrange(new Rect(0,0,320,142));chart.SetSeries(values);chart.FinishAnimation();
+            var visual=new DrawingVisual();using(var dc=visual.RenderOpen())typeof(CreditChart).GetMethod("OnRender",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(chart,new object[]{dc});
+            var bridges=Drawings(visual.Drawing).OfType<GeometryDrawing>().Where(d=>d.Pen!=null && d.Pen.DashStyle.Dashes.Count>0).ToArray();
+            Require(bridges.Length==1,"gaps were left blank, extrapolated at edges, or joined across series");
+            Require(bridges[0].Bounds.Left>70 && bridges[0].Bounds.Right<250,"bridge extends past adjacent valid samples");
+            Require(chart.DescribeBucket(2).Contains("数据不完整") && chart.DescribeBucket(2).Contains("虚线仅连接趋势"),"missing interval tooltip hides interpolation semantics");
+            var stored=(List<double?[]>)typeof(CreditChart).GetField("raw",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart);
+            Require(!stored[0][2].HasValue && stored[0][1]==10 && stored[0][4]==20,"bridge changed recorded consumption");
+            chart.SetSeries(new List<double?[]>{new double?[]{null,null,null}});chart.FinishAnimation();
+            using(var dc=visual.RenderOpen())typeof(CreditChart).GetMethod("OnRender",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(chart,new object[]{dc});
+            Require(!Drawings(visual.Drawing).OfType<GeometryDrawing>().Any(d=>d.Pen!=null && d.Pen.DashStyle.Dashes.Count>0),"all-missing data creates a curve");
+        });
+        Check("longer chart windows retain more variation under smoothing", delegate {
+            var start=new DateTime(2026,9,1);var raw=new double?[]{0,0,100,0,0,null,80,80};double previousPeak=0;
+            foreach(int hours in new[]{1,6,24,168,720}){
+                var chart=new CreditChart{Start=start,End=start.AddHours(hours),Smooth=true};chart.SetSeries(new List<double?[]>{raw});chart.FinishAnimation();
+                var points=((List<double?[]>)typeof(CreditChart).GetField("target",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart))[0];
+                Require(points[2]>previousPeak && points[2]<100,"smoothing fails to weaken for a longer window");Require(!points[5].HasValue && points[6]==80,"adaptive smoothing crosses a gap");previousPeak=points[2].Value;
+                chart.Smooth=false;chart.SetSeries(new List<double?[]>{raw});chart.FinishAnimation();
+                var unchanged=((List<double?[]>)typeof(CreditChart).GetField("target",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(chart))[0];Require(unchanged.SequenceEqual(raw),"raw mode still smooths data");
+            }
+        });
         Check("chart hover opens immediately and shows rates for completed and partial intervals", delegate {
             var start=new DateTime(2026,9,16,9,0,0);var chart=new CreditChart{Start=start,End=start.AddMinutes(2),ObservedAt=start.AddSeconds(90)};
             chart.SetSeries(new List<double?[]>{new double?[]{12,24}});
@@ -164,5 +189,9 @@ public static class FrontendRegression {
     private static void Pump(int milliseconds) { var frame=new System.Windows.Threading.DispatcherFrame();var timer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(milliseconds)};timer.Tick+=delegate{timer.Stop();frame.Continue=false;};timer.Start();System.Windows.Threading.Dispatcher.PushFrame(frame); }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root) {
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) { var child = VisualTreeHelper.GetChild(root, i); yield return child; foreach (var next in Descendants(child)) yield return next; }
+    }
+    private static IEnumerable<Drawing> Drawings(Drawing drawing) {
+        yield return drawing;var group=drawing as DrawingGroup;
+        if(group!=null)foreach(var child in group.Children)foreach(var descendant in Drawings(child))yield return descendant;
     }
 }

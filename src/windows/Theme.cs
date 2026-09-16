@@ -16,8 +16,17 @@ namespace CodexPetCredits {
         }
     }
     public static class CurveSmoothing {
+        // Long-range bins already aggregate many hours; preserve more of their original variation.
+        public static double Strength(TimeSpan window) {
+            double hours=window.TotalHours;
+            return hours<=1?1:hours<=6?.8:hours<=24?.55:hours<=168?.25:.1;
+        }
         // Weighted five-bin smoothing affects the visual trend only; nulls break the filter's support.
         public static double?[] Apply(double?[] values) {
+            return Apply(values,1);
+        }
+        public static double?[] Apply(double?[] values,double strength) {
+            strength=Math.Max(0,Math.Min(1,strength));
             var result = new double?[values.Length]; int[] weights = {1,4,6,4,1};
             for(int i=0;i<values.Length;i++) {
                 if(!values[i].HasValue)continue;
@@ -26,7 +35,7 @@ namespace CodexPetCredits {
                     int at=i+direction*step;if(at<0 || at>=values.Length || !values[at].HasValue)break;
                     int w=weights[2+direction*step];sum+=values[at].Value*w;weight+=w;
                 }
-                result[i]=sum/weight;
+                result[i]=values[i].Value+(sum/weight-values[i].Value)*strength;
             } return result;
         }
     }

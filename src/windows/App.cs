@@ -258,8 +258,9 @@ namespace CodexPetCredits {
             totalLabel.Text=comparison?"已选合计":"时段消耗";
             totalLabel.ToolTip="图中曲线在所选时段内的消耗合计";
             double minutes=(Json.Number(state,"windowEnd")-Json.Number(state,"windowStart"))/48/60000;
-            intervalLabel.Text="消耗趋势";
             var series=Json.Items(Json.Get(state,"series")).ToArray();
+            bool hasGaps=series.Any(s=>{var points=Json.Items(Json.Get(s,"points")).ToArray();return points.SkipWhile(v=>v==null).Reverse().SkipWhile(v=>v==null).Any(v=>v==null);});
+            intervalLabel.Text=hasGaps?"虚线：数据不完整":"消耗趋势";
             chart.Names=series.Select(s=>Json.Text(s,"name")).ToArray();
             chart.Smooth=Json.Text(settings,"smoothing","smooth")=="smooth";
             chart.ContextKey=Json.Text(state,"chartKey",Json.Text(settings,"scope")+":"+Json.Text(settings,"range")+":"+String.Join("|",chart.Names))+":"+chart.Smooth;
@@ -269,7 +270,7 @@ namespace CodexPetCredits {
             UpdateText(recentHour,Credit(Json.Get(state,"recentCredits"),"hour"));UpdateText(recentDay,Credit(Json.Get(state,"recentCredits"),"day"));
             UpdateText(reset,"额度重置  "+Json.Text(state,"resetLabel"));
             UpdateText(status,Json.Get(state,"updated")==null?"等待额度数据":Json.Number(state,"updated")>300?"额度更新暂停":"额度已更新 · 消耗来自本机");
-            UpdateText(coverage,Json.Text(state,"coverage")+"\n\n"+Json.Text(state,"forecastDetail")+"\n\n平滑仅影响曲线形状；悬停显示区间原值，合计保持原始估算。\n费率 "+Json.Text(state,"rateVersion"));
+            UpdateText(coverage,Json.Text(state,"coverage")+"\n\n"+Json.Text(state,"forecastDetail")+"\n\n周期越长，平滑强度越低。虚线仅连接数据不完整的区间，不补算消耗；悬停显示区间原值，合计保持原始估算。\n费率 "+Json.Text(state,"rateVersion"));
             string signature=Json.Serializer.Serialize(new object[]{series.Select(s=>new[]{Json.Text(s,"name"),Credit(s,"total")}),Json.Get(state,"details"),Json.Get(state,"otherQuotas"),Json.Get(state,"officialTaskCredits"),dark,accent});
             if(signature==detailSignature)return;detailSignature=signature;
             var legends=new List<RowValue>();
@@ -371,6 +372,13 @@ namespace CodexPetCredits {
                         if (window.ActualWidth < 300 || window.ActualHeight < 70 || window.ActualHeight > 900) throw new Exception("UI layout bounds failed");
                     }
                     foreach(string theme in new[]{"dark","light"})foreach(string accent in Palette.Keys){var settings=Json.Map(fixture["settings"]);settings["density"]=2;settings["theme"]=theme;settings["accent"]=accent;window.UpdateView(fixture);window.RenderTo(Path.Combine(output,theme+"-"+accent+".png"),true,true);}
+                    // Exercise bounded gaps in both themes using explicitly synthetic preview data.
+                    foreach(var series in Json.Items(fixture["series"])){
+                        var points=Json.Items(Json.Get(series,"points")).ToArray();for(int i=12;i<18 && i<points.Length;i++)points[i]=null;
+                        Json.Map(series)["points"]=points;
+                    }
+                    fixture["windowStart"]=Json.Number(fixture,"windowEnd")-TimeSpan.FromDays(30).TotalMilliseconds;
+                    foreach(string theme in new[]{"dark","light"}){var settings=Json.Map(fixture["settings"]);settings["density"]=1;settings["theme"]=theme;settings["range"]="30d";settings["accent"]="blue";settings["smoothing"]="smooth";window.UpdateView(fixture);window.RenderTo(Path.Combine(output,theme+"-gaps.png"));}
                     window.Close(); File.WriteAllText(Path.Combine(output, "ui-test.txt"), "PASS: all three densities rendered in light and dark themes; layout bounds valid."); return 0;
                 }
                 // Create the handle without presenting a floating window before the pet is found.

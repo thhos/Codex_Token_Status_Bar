@@ -42,7 +42,7 @@ namespace CodexPetCredits {
         private void ClearHover(){ hover=-1; if(ToolTip is ToolTip)((ToolTip)ToolTip).IsOpen=false; ToolTip=null; InvalidateVisual(); }
         public void SetSeries(List<double?[]> values){
             values=values.Select(row=>row.Select(v=>v.HasValue && !Double.IsNaN(v.Value) && !Double.IsInfinity(v.Value) && v.Value>=0?v:null).ToArray()).ToList();
-            raw=values; if(Smooth) values=values.Select(CurveSmoothing.Apply).ToList();
+            raw=values; if(Smooth) values=values.Select(row=>CurveSmoothing.Apply(row,CurveSmoothing.Strength(End-Start))).ToList();
             bool contextChanged=appliedKey!=ContextKey;
             bool same=!contextChanged && values.Count==target.Count && values.Select((row,i)=>row.SequenceEqual(target[i])).All(x=>x);
             if(same){if(hover>=0)UpdateTooltip();return;}
@@ -90,9 +90,10 @@ namespace CodexPetCredits {
             string format=ticks%TimeSpan.TicksPerMinute==0 && end.Second==0 && begin.Second==0?"HH:mm":"HH:mm:ss";
             var lines=new List<string>{begin.ToString("MM/dd "+format)+"–"+end.ToString(end.Date==begin.Date?format:"MM/dd "+format)};
             for(int i=0;i<Math.Min(5,raw.Count);i++)if(index<raw[i].Length){string name=raw.Count>1?UiText.Short(i<Names.Length?Names[i]:"用量",16)+"  ":"";
-                if(minutes<=0 || !raw[i][index].HasValue)lines.Add(name+"暂无记录");
+                if(minutes<=0 || !raw[i][index].HasValue)lines.Add(name+"数据不完整，无法计算消耗速度");
                 else{double credits=raw[i][index].Value;lines.Add(name+(credits/minutes).ToString("0.##")+" cr/min");lines.Add("区间消耗 "+credits.ToString("0.##")+" cr");}
             }
+            if(raw.Any(row=>index<row.Length && !row[index].HasValue && row.Take(index).Any(v=>v.HasValue) && row.Skip(index+1).Any(v=>v.HasValue)))lines.Add("虚线仅连接趋势，不计入消耗");
             return String.Join("\n",lines);
         }
         protected override void OnRender(DrawingContext dc){
@@ -108,9 +109,16 @@ namespace CodexPetCredits {
             dc.PushClip(new RectangleGeometry(plot)); bool any=false;
             for(int i=0;i<data.Count;i++){
                 var segment=new List<Point>();
+                Point? previousPoint=null;int previousIndex=-1;
                 for(int j=0;j<data[i].Length;j++){
                     if(!data[i][j].HasValue){ DrawCurve(dc,segment,Palette.Series(Accent,Dark,i)); segment.Clear(); continue; }
-                    any=true; segment.Add(new Point(plot.Left+plot.Width*(j+.5)/data[i].Length,plot.Bottom-Math.Min(1,data[i][j].Value/scale)*plot.Height));
+                    any=true;var point=new Point(plot.Left+plot.Width*(j+.5)/data[i].Length,plot.Bottom-Math.Min(1,data[i][j].Value/scale)*plot.Height);
+                    // Bridge only bounded gaps. Dashed interpolation never enters raw data or totals.
+                    if(previousPoint.HasValue && j>previousIndex+1){
+                        var bridgeBrush=new SolidColorBrush(Palette.Series(Accent,Dark,i)){Opacity=.55};
+                        dc.DrawLine(new Pen(bridgeBrush,1.4){DashStyle=new DashStyle(new[]{3.0,3.0},0)},previousPoint.Value,point);
+                    }
+                    segment.Add(point);previousPoint=point;previousIndex=j;
                 } DrawCurve(dc,segment,Palette.Series(Accent,Dark,i));
             }
             if(hover>=0 && data.Count>0 && data[0].Length>0){ double x=plot.Left+plot.Width*(hover+.5)/data[0].Length; dc.DrawLine(new Pen(muted,1),new Point(x,plot.Top),new Point(x,plot.Bottom)); }
