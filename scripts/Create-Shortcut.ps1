@@ -7,6 +7,6 @@ $shortcut.Arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -F
 $shortcut.WorkingDirectory = $projectRoot
 $shortcut.WindowStyle = 7
 $shortcut.Description = 'Launch Codex with its attached credit status bar'
-$shortcut.IconLocation = (Join-Path $projectRoot 'build\CodexPetCredits.exe') + ',0'
+$shortcut.IconLocation = (Join-Path $projectRoot 'assets\app-icon.ico') + ',0'
 $shortcut.Save()
 Write-Output 'Created Codex + Credits.lnk in the project folder.'

@@ -10,9 +10,11 @@ export const READ_PET = String.raw`(() => {
 
 export const READ_METADATA = String.raw`(() => {
   const visible = el => { if (!el) return false; const r=el.getBoundingClientRect(); if(r.width<=0 || r.height<=0)return false; for(let n=el;n;n=n.parentElement){const s=getComputedStyle(n);if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0)return false;} return true; };
-  const composer = [...document.querySelectorAll('[data-above-composer-conversation-id]')].filter(visible);
+  // The ID marker may be a zero-sized sibling of the editor. Visibility belongs to its composer root.
+  const owner = el => el.closest('[data-codex-composer-root]') || el;
+  const composer = [...document.querySelectorAll('[data-above-composer-conversation-id]')].filter(el => visible(owner(el)));
   const active = document.activeElement;
-  const focusedComposer = composer.find(el => el.contains(active));
+  const focusedComposer = composer.find(el => owner(el).contains(active));
   const mainComposer = composer.find(el => el.closest('[data-composer-placement]')?.getAttribute('data-composer-placement') !== 'sidebar');
   const selected = focusedComposer || mainComposer || composer[0];
   const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;

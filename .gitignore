@@ -1,6 +1,9 @@
 prev/
 build/
 build-next/
+dist/
+.env
+.env.*
 artifacts/
 *.log
 node_modules/

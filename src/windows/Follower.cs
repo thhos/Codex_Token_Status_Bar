@@ -19,7 +19,9 @@ namespace CodexPetCredits {
         private Task<Discovery> discovery;
         private AttachmentTransition transition;
         private DateTime transitionStarted;
-        private Point transitionAnchor, transitionTarget;
+        private Point transitionAnchor;
+        private int transitionFromSide;
+        private double transitionFromBottom;
         public IntPtr PetHandle { get; private set; }
         public bool Dragging { get; private set; }
         public void Observe(object data) {
@@ -62,23 +64,28 @@ namespace CodexPetCredits {
             if(companion!=null && (Math.Abs(window.Height-maxHeight)>.5 || companion.SurfaceHeight<1)){window.Height=maxHeight;window.UpdateLayout();}
             int previousSide = placement.Side;
             double requestedHeight=Math.Max(1,companion==null?window.ActualHeight:companion.RequestedSurfaceHeight)*dpi;
-            var destination = placement.Place(pet, new Size(window.Width*dpi,requestedHeight), work, obstacles, Dragging);
-            // A limit is needed only when space actually runs out, not on every animation frame.
-            if(companion!=null){companion.SetSurfaceHeightLimit(destination.Height<requestedHeight-.01?destination.Height/dpi:Double.PositiveInfinity);companion.SetAttachmentSide(placement.Side);}
-            if (!first && previousSide != placement.Side && SystemParameters.ClientAreaAnimation) {
-                transition = new AttachmentTransition(new Rect(x, y, destination.Width, destination.Height), destination, work, obstacles);
-                transitionStarted = now; transitionAnchor = pet.TopLeft; transitionTarget = destination.TopLeft;
+            var destination = placement.Place(pet, new Size(window.Width*dpi,requestedHeight), work, obstacles, Dragging,companion==null?64:companion.AttachmentStabilityMargin*dpi);
+            if (!first && previousSide != placement.Side && transition==null && SystemParameters.ClientAreaAnimation) {
+                double paintedHeight=companion==null?window.ActualHeight*dpi:companion.SurfaceHeight*dpi;
+                transition = new AttachmentTransition(new Rect(x,y,destination.Width,paintedHeight),destination);
+                transitionStarted=now;transitionAnchor=pet.TopLeft;transitionFromSide=previousSide;transitionFromBottom=y+paintedHeight;
+            }
+            double progress=transition==null?1:Math.Min(1,(now-transitionStarted).TotalMilliseconds/280);
+            // Keep the old attachment edge until the panel is fully transparent.
+            if(companion!=null && progress>=.5){
+                companion.SetSurfaceHeightLimit(destination.Height<requestedHeight-.01?destination.Height/dpi:Double.PositiveInfinity);
+                companion.SetAttachmentSide(placement.Side);
             }
             double opacity = 1;
             if (transition != null) {
-                double progress = Math.Min(1, (now - transitionStarted).TotalMilliseconds / 340);
-                var point = transition.Sample(progress); var translation = pet.TopLeft - transitionAnchor;
-                // Keep a direction-change animation attached to the moving pet, including edge clamping.
-                point += translation + (destination.TopLeft - (transitionTarget + translation)) * progress;
-                x = Math.Max(work.Left + 2, Math.Min(point.X, work.Right - destination.Width - 2));
-                y = Math.Max(work.Top + 2, Math.Min(point.Y, work.Bottom - destination.Height - 2));
+                var translation=pet.TopLeft-transitionAnchor;
+                var point=progress<.5?transition.Sample(0)+translation:destination.TopLeft;
+                if(progress<.5 && companion!=null && transitionFromSide==0)point.Y=transitionFromBottom+translation.Y-companion.SurfaceHeight*dpi;
+                double paintedHeight=companion==null?destination.Height:companion.SurfaceHeight*dpi;
+                x=Math.Max(work.Left+2,Math.Min(point.X,work.Right-destination.Width-2));
+                y=Math.Max(work.Top+2,Math.Min(point.Y,work.Bottom-paintedHeight-2));
                 opacity = transition.Visibility(progress);
-                if (obstacles.Exists(r => new Rect(x,y,destination.Width,destination.Height).IntersectsWith(r))) opacity = 0;
+                if (obstacles.Exists(r => new Rect(x,y,destination.Width,paintedHeight).IntersectsWith(r))) opacity = 0;
                 if (progress >= 1) { transition = null; x = destination.X; y = destination.Y; opacity = 1; }
             } else { x = destination.X; y = destination.Y; }
             first = false;

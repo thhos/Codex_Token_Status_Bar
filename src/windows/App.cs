@@ -95,6 +95,7 @@ namespace CodexPetCredits {
             headerReveal.Expanded=visible;
         }
         public double SurfaceHeight { get { return panel.ActualHeight; } }
+        public double AttachmentStabilityMargin { get { return header.DesiredSize.Height+16; } }
         public double RequestedSurfaceHeight { get { return contentReveal.DesiredSize.Height+panel.Padding.Top+panel.Padding.Bottom+panel.BorderThickness.Top+panel.BorderThickness.Bottom; } }
         public double SurfaceOffset { get { return panel.TranslatePoint(new Point(),this).Y; } }
         public void SetSurfaceHeightLimit(double height){

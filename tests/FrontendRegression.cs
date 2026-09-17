@@ -87,15 +87,10 @@ public static class FrontendRegression {
             Require(!(bool)lifecycle.Invoke(null,new object[]{(uint)0x8001,0,2}),"child destroy event hides the panel");
             Require((bool)lifecycle.Invoke(null,new object[]{(uint)0x8003,0,0}),"real window hide was ignored");
         });
-        Check("direction changes move continuously around the pet", delegate {
-            var pet=new Rect(700,390,100,120);var from=new Rect(600,140,320,200);var to=new Rect(600,550,320,200);var work=new Rect(0,0,1600,1000);
-            var transition=new AttachmentTransition(from,to,work,new[]{pet});
-            Require(!transition.FadeThrough,"a clear route should animate movement");
-            var previous=transition.Sample(0);Require(previous==from.TopLeft,"wrong transition start");
-            for(int i=1;i<=60;i++) {var point=transition.Sample(i/60.0);Require((point-previous).Length<40,"animation teleports between frames");Require(!new Rect(point,to.Size).IntersectsWith(pet),"animation crosses the pet");previous=point;}
-            Require(transition.Sample(1)==to.TopLeft,"transition misses destination");
-            var blocked=new AttachmentTransition(new Rect(0,0,320,200),new Rect(0,700,320,200),new Rect(0,0,330,1000),new[]{new Rect(0,400,330,100)});
-            Require(blocked.FadeThrough && blocked.Visibility(.5)==0,"no-space transition must relocate while fully faded");
+        Check("direction changes fade smoothly before and after relocation", delegate {
+            var transition=new AttachmentTransition(new Rect(600,140,320,200),new Rect(600,550,320,200));
+            double previous=1;for(int i=0;i<=100;i++){double alpha=transition.Visibility(i/100.0);Require(Math.Abs(alpha-previous)<.05,"opacity changed abruptly");previous=alpha;}
+            Require(transition.Visibility(0)==1 && transition.Visibility(.5)==0 && transition.Visibility(1)==1,"fade endpoints are incorrect");
         });
         Check("smoothing reduces spikes without filling missing data or changing raw samples", delegate {
             var raw=new double?[]{0,0,30,0,0,null,80,80,80};var result=CurveSmoothing.Apply(raw);
@@ -329,6 +324,18 @@ public static class FrontendRegression {
             Require(result.Left>=work.Left && result.Right<=work.Right,"horizontal overflow");
             Require(result.Bottom<=pet.Top || result.Top>=pet.Bottom,"height-constrained panel overlaps the pet");
             Require(result.Height<480,"insufficient vertical space must constrain height instead of moving sideways");
+        });
+        Check("hover-sized changes near an edge do not repeatedly flip attachment sides", delegate {
+            var placement=new AttachmentPlacement();var pet=new Rect(900,335,113,123);var work=new Rect(0,0,1600,825);
+            placement.Place(pet,new Size(368,315),work,new[]{pet},false);int changes=0,side=placement.Side;
+            for(int i=0;i<40;i++){placement.Place(pet,new Size(368,i%2==0?280:315),work,new[]{pet},false);if(placement.Side!=side)changes++;side=placement.Side;}
+            Require(changes==0,"header-sized changes flipped sides "+changes+" times");
+        });
+        Check("direction change stays at endpoints and relocates only while invisible", delegate {
+            var from=new Rect(550,120,368,200);var to=new Rect(550,700,368,200);
+            var transition=new AttachmentTransition(from,to);
+            for(int i=0;i<=100;i++){double progress=i/100.0;Point point=transition.Sample(progress);Require(point==from.TopLeft || point==to.TopLeft,"transition takes a visible detour around the pet");}
+            Require(transition.Visibility(.49)==0 && transition.Visibility(.51)==0,"relocation lacks an invisible interval");
         });
         Check("opacity preview retains theme controls and chart data", delegate {
             var fixture=(Dictionary<string,object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(args[0],"tests","view-fixture.json")));
