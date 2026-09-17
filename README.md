@@ -6,7 +6,7 @@ Windows 上附着于 Codex 自带宠物的 credits 状态栏。采用本机已�
 
 ## 下载与环境
 
-从 GitHub Releases 下载 `Codex_Token_Status_Bar-v1.9.0-windows-x64.zip`，解压到固定目录后运行 `Start.cmd`。它会生成带图标的 `Codex + Credits.lnk`，以后可直接使用此快捷方式。ZIP 已包含编译好的挂件，无需先构建。
+从 [GitHub Releases](https://github.com/thhos/Codex_Token_Status_Bar/releases/latest) 下载 `Codex_Token_Status_Bar-v1.9.0-windows-x64.zip`，解压到固定目录后运行 `Start.cmd`。它会生成带图标的 `Codex + Credits.lnk`，以后可直接使用此快捷方式。ZIP 已包含编译好的挂件，无需先构建。
 
 运行需要 Windows x64、.NET Framework 4.8、Node.js 24+（可在 PATH 中找到）以及已安装并登录的 Codex 桌面客户端。运行数据保存在用户的 LocalAppData 中，发布包不含个人数据。此项目为独立工具，采用 credits 估算消耗、官方百分比表示剩余额度。
 
